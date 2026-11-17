@@ -30,6 +30,8 @@ temp/
 pip_cache/
 hf_cache/
 .pytest_cache/
+*stage1*
+outputs/dashboard_uploads/
 
 # OS Specific
 Thumbs.db

@@ -91,6 +91,7 @@ def evaluate_module_b(ae_path: Path, threshold_path: Path):
     scores = []
 
     patch_size = 64
+    step = 64
     for img_p in test_images:
         lbl_p = TEST_LBL_DIR / f"{img_p.stem}.txt"
         has_object = False
@@ -103,15 +104,25 @@ def evaluate_module_b(ae_path: Path, threshold_path: Path):
         if im_gray is None:
             continue
 
-        im_resized = cv2.resize(im_gray, (patch_size, patch_size))
-        tensor = torch.from_numpy(im_resized).float().unsqueeze(0).unsqueeze(0) / 255.0
+        h, w = im_gray.shape
+        patches = []
+        for py in range(0, max(1, h - patch_size + 1), step):
+            for px in range(0, max(1, w - patch_size + 1), step):
+                p = im_gray[py : py + patch_size, px : px + patch_size]
+                if p.shape == (patch_size, patch_size):
+                    patches.append(torch.from_numpy(p).float().unsqueeze(0).unsqueeze(0) / 255.0)
 
+        if not patches:
+            continue
+
+        batch_tensors = torch.cat(patches, dim=0)
         with torch.no_grad():
-            recon = ae(tensor)
-            mse = float(torch.mean((tensor - recon) ** 2).item())
+            recon = ae(batch_tensors)
+            mses = torch.mean((batch_tensors - recon) ** 2, dim=[1, 2, 3]).numpy()
+            max_mse = float(np.max(mses))
 
         y_true.append(1 if has_object else 0)
-        scores.append(mse)
+        scores.append(max_mse)
 
     y_true = np.array(y_true)
     scores = np.array(scores)
