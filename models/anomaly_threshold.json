@@ -1,0 +1,12 @@
+{
+  "patch_size": 64,
+  "input_channels": 1,
+  "threshold_95": 0.004810937400907273,
+  "threshold_99": 0.007253762222826478,
+  "threshold_995": 0.007876622362527994,
+  "recommended_threshold": 0.007253762222826478,
+  "mean_error": 0.002293628818458981,
+  "std_error": 0.0013251661626222926,
+  "epochs": 20,
+  "final_val_loss": 0.0022936288360506296
+}

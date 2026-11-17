@@ -1,0 +1,7 @@
+path: D:/unsupervised/data/processed/sss
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: ghost_gear
+  1: manmade_object

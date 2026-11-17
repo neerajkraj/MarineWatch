@@ -1,0 +1,36 @@
+# Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+
+# Python & IDE Caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.vscode/
+.idea/
+
+# Large Datasets & Archives (Exceeds GitHub 100MB limit - download via src/download_data.py)
+data/raw/
+data/normal_tiles/
+data/processed/
+*.zip
+*.tar.gz
+*.hdf5
+*.weights
+*.conv.*
+
+# Ultralytics & Runtime Caches
+*.cache
+yolo11n.pt
+yolov8n.pt
+temp/
+pip_cache/
+hf_cache/
+.pytest_cache/
+
+# OS Specific
+Thumbs.db
+.DS_Store

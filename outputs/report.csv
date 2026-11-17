@@ -1,0 +1,3 @@
+image,x1,y1,x2,y2,source,label,score
+nombo_nombo_2010_t007807.jpg,102,165,119,176,Module A (YOLO),ghost_gear,0.4932
+nombo_nombo_2010_t007807.jpg,107,167,123,175,Module A (YOLO),ghost_gear,0.3431

@@ -1,0 +1,5 @@
+MarineWatch Sonar Failure Mode Diagnostic Summary:
+1. False Positives (Sediment ripples & sand dunes): Periodic sand ridges create high acoustic contrast shadows that can trigger localized anomaly spikes. Spatial morphological filtering reduces small ridge detections.
+2. False Positives (Subsea cables/pipelines): Continuous linear features can exhibit high reflection profiles similar to net top-lines.
+3. False Negatives (Acoustic dead zones / Nadir shadows): Objects directly below the AUV in the nadir region lack side-illuminating shadows, reducing detection contrast.
+4. False Negatives (Degraded/buried nets): Heavily silted derelict fishing gear loses high-contrast edges; Module B helps flag these as textural deviations even when YOLO misses bounding boxes.
