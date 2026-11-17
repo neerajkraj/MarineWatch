@@ -1,18 +1,24 @@
 """
-MarineWatch — Phase 7: Interactive Flask Dashboard (CPU Friendly)
+MarineWatch — Interactive Sonar Dashboard (Option 1 & Option 2: Multi-View Anomaly Heatmap)
 
-Web interface for operators to upload side-scan sonar imagery,
-run dual-module inference (YOLO-nano + Anomaly Autoencoder),
-view annotated detections, and inspect tabular contact reports.
+Features:
+- Side-by-side / Multi-tabbed views:
+    Tab 1: Combined Dual-Module Fused View (Bounding Boxes + Thermal Anomaly Heatmap)
+    Tab 2: Module A YOLO Detections
+    Tab 3: Module B Acoustic Anomaly Heatmap (Thermal Overlay)
+    Tab 4: Raw Sonar Imagery
+- Real-time confidence & peak anomaly metrics
+- Downloadable Mission CSV Report
+- Fast CPU inference (<150 ms per tile)
 """
 
 import os
 import sys
 import shutil
 from pathlib import Path
-from flask import Flask, request, render_template_string, send_from_directory, redirect, url_for
+from flask import Flask, request, render_template_string, send_from_directory, redirect, url_for, send_file
 
-# Add src to python path for pipeline import
+# Add src to python path
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC_DIR))
 from infer import MarineWatchPipeline
@@ -23,9 +29,8 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = str(UPLOADS_DIR)
-app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB max
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 
-# Lazy-loaded global pipeline
 PIPELINE = None
 
 
@@ -42,18 +47,18 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MarineWatch — Underwater Debris & Anomaly Detector</title>
+    <title>MarineWatch — Sonar Debris & Anomaly Detector</title>
     <style>
         :root {
-            --bg: #0b1320;
-            --card-bg: #131e33;
-            --border: #233554;
+            --bg: #090e17;
+            --card-bg: #111a2e;
+            --border: #1f2f4e;
             --accent: #00d2ff;
             --ghost: #ff4757;
             --manmade: #ffa502;
-            --anomaly: #2ed573;
-            --text: #e1e7f0;
-            --text-muted: #8892b0;
+            --anomaly: #00e676;
+            --text: #e2e8f0;
+            --text-muted: #8c9cb8;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -63,7 +68,7 @@ HTML_TEMPLATE = """
             padding: 24px;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1240px;
             margin: 0 auto;
         }
         header {
@@ -71,7 +76,7 @@ HTML_TEMPLATE = """
             align-items: center;
             justify-content: space-between;
             border-bottom: 1px solid var(--border);
-            padding-bottom: 16px;
+            padding-bottom: 18px;
             margin-bottom: 24px;
         }
         h1 {
@@ -80,25 +85,26 @@ HTML_TEMPLATE = """
             color: #fff;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
         }
         .tagline {
             color: var(--text-muted);
-            font-size: 14px;
+            font-size: 13.5px;
             margin-top: 4px;
         }
-        .badge {
-            background: #1e3a5f;
+        .badge-cpu {
+            background: rgba(0, 210, 255, 0.12);
             color: var(--accent);
-            padding: 4px 10px;
-            border-radius: 12px;
+            border: 1px solid var(--accent);
+            padding: 6px 14px;
+            border-radius: 20px;
             font-size: 12px;
             font-weight: 600;
         }
         .upload-section {
             background: var(--card-bg);
             border: 2px dashed var(--border);
-            border-radius: 8px;
+            border-radius: 10px;
             padding: 24px;
             text-align: center;
             margin-bottom: 24px;
@@ -107,9 +113,9 @@ HTML_TEMPLATE = """
             display: none;
         }
         .upload-btn {
-            background: #1e3a5f;
+            background: #192642;
             color: #fff;
-            padding: 10px 20px;
+            padding: 10px 22px;
             border-radius: 6px;
             cursor: pointer;
             display: inline-block;
@@ -130,13 +136,25 @@ HTML_TEMPLATE = """
             font-weight: bold;
             cursor: pointer;
             margin-left: 12px;
+            transition: opacity 0.2s;
         }
         .submit-btn:hover {
             opacity: 0.9;
         }
+        .sample-links {
+            margin-top: 14px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+        .sample-links a {
+            color: var(--accent);
+            text-decoration: none;
+            margin: 0 8px;
+            font-weight: 500;
+        }
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -148,36 +166,62 @@ HTML_TEMPLATE = """
             text-align: center;
         }
         .stat-number {
-            font-size: 28px;
+            font-size: 32px;
             font-weight: bold;
-            margin: 8px 0;
+            margin: 6px 0;
         }
         .stat-label {
             font-size: 13px;
             color: var(--text-muted);
         }
-        .image-preview-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-bottom: 24px;
+        /* Tab Navigation */
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
         }
-        .preview-box {
+        .tab-btn {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid transparent;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        .tab-btn.active {
+            background: #1c2c4d;
+            color: var(--accent);
+            border-color: var(--border);
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .view-card {
             background: var(--card-bg);
             border: 1px solid var(--border);
-            border-radius: 8px;
+            border-radius: 10px;
             padding: 16px;
+            text-align: center;
+            margin-bottom: 24px;
         }
-        .preview-box h3 {
-            margin-top: 0;
-            font-size: 15px;
-            color: var(--accent);
-        }
-        .preview-box img {
-            width: 100%;
+        .view-card img {
+            max-width: 100%;
             height: auto;
-            border-radius: 4px;
+            border-radius: 6px;
             border: 1px solid #000;
+        }
+        .view-caption {
+            font-size: 13.5px;
+            color: var(--text-muted);
+            margin-top: 10px;
         }
         table {
             width: 100%;
@@ -186,14 +230,15 @@ HTML_TEMPLATE = """
             border-radius: 8px;
             overflow: hidden;
             border: 1px solid var(--border);
+            margin-bottom: 24px;
         }
         th, td {
-            padding: 12px 16px;
+            padding: 12px 18px;
             text-align: left;
-            font-size: 14px;
+            font-size: 13.5px;
         }
         th {
-            background: #182844;
+            background: #14223d;
             color: var(--text-muted);
             border-bottom: 1px solid var(--border);
         }
@@ -203,15 +248,21 @@ HTML_TEMPLATE = """
         .badge-ghost { color: var(--ghost); font-weight: bold; }
         .badge-manmade { color: var(--manmade); font-weight: bold; }
         .badge-anomaly { color: var(--anomaly); font-weight: bold; }
-        .sample-links {
-            margin-top: 14px;
-            font-size: 13px;
-            color: var(--text-muted);
-        }
-        .sample-links a {
+        .download-btn {
+            background: #1c2c4d;
             color: var(--accent);
+            border: 1px solid var(--border);
+            padding: 8px 16px;
+            border-radius: 6px;
             text-decoration: none;
-            margin: 0 6px;
+            display: inline-block;
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        .download-btn:hover {
+            background: var(--accent);
+            color: var(--bg);
         }
     </style>
 </head>
@@ -220,9 +271,9 @@ HTML_TEMPLATE = """
         <header>
             <div>
                 <h1>🌊 MarineWatch — Sonar Debris & Anomaly Detector</h1>
-                <div class="tagline">Dual-Module CPU Architecture: YOLO-nano (Known Contacts) + Autoencoder (Unsupervised Anomalies)</div>
+                <div class="tagline">Dual-Module Fusion: Supervised YOLO-nano + Unsupervised Thermal Anomaly Heatmap</div>
             </div>
-            <span class="badge">CPU-Only Edition (Core i3)</span>
+            <span class="badge-cpu">CPU Accelerated (Core i3 Edition)</span>
         </header>
 
         <div class="upload-section">
@@ -230,12 +281,12 @@ HTML_TEMPLATE = """
                 <label class="upload-btn" for="sonar_file">Choose Sonar Image...</label>
                 <input type="file" id="sonar_file" name="sonar_file" accept=".jpg,.jpeg,.png,.bmp" onchange="document.getElementById('file-chosen').textContent = this.files[0].name">
                 <span id="file-chosen" style="margin-left: 12px; color: var(--accent);">No file selected</span>
-                <button type="submit" class="submit-btn">Run Detection</button>
+                <button type="submit" class="submit-btn">Run Detection & Heatmap</button>
             </form>
             <div class="sample-links">
-                Quick Test Samples: 
-                <a href="/sample?name=test_sample_1.jpg">Test Sample 1</a> | 
-                <a href="/sample?name=test_sample_2.jpg">Test Sample 2</a>
+                Quick Sonar Samples: 
+                <a href="/sample?name=test_sample_1.jpg">Test Sample 1 (Contacts)</a> | 
+                <a href="/sample?name=test_sample_2.jpg">Test Sample 2 (Ghost Gear)</a>
             </div>
         </div>
 
@@ -246,7 +297,7 @@ HTML_TEMPLATE = """
                 <div class="stat-number" style="color: var(--accent);">{{ detections|length }}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Ghost Gear (Module A)</div>
+                <div class="stat-label">Ghost Gear / Pots (Module A)</div>
                 <div class="stat-number" style="color: var(--ghost);">{{ count_ghost }}</div>
             </div>
             <div class="stat-card">
@@ -259,26 +310,55 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <div class="image-preview-grid">
-            <div class="preview-box">
-                <h3>Original Sonar Imagery</h3>
-                <img src="/files/{{ raw_filename }}" alt="Original Sonar">
-            </div>
-            <div class="preview-box">
-                <h3>Annotated Detections (Module A & B Fusion)</h3>
-                <img src="/files/{{ annotated_filename }}" alt="Annotated Sonar">
+        <!-- Multi-View Tabs -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="openTab(event, 'tab-fused')">🔀 Fused Dual-View</button>
+            <button class="tab-btn" onclick="openTab(event, 'tab-heatmap')">🔥 Thermal Anomaly Heatmap</button>
+            <button class="tab-btn" onclick="openTab(event, 'tab-boxes')">📦 YOLO Bounding Boxes</button>
+            <button class="tab-btn" onclick="openTab(event, 'tab-raw')">📷 Raw Sonar Image</button>
+        </div>
+
+        <div id="tab-fused" class="tab-content active">
+            <div class="view-card">
+                <img src="/files/{{ files.fused }}" alt="Fused View">
+                <div class="view-caption">Combined Overlay: YOLO Bounding Boxes layered over the Autoencoder Acoustic Heatmap</div>
             </div>
         </div>
 
-        <h3>Detection Report</h3>
+        <div id="tab-heatmap" class="tab-content">
+            <div class="view-card">
+                <img src="/files/{{ files.heatmap }}" alt="Thermal Heatmap">
+                <div class="view-caption">Module B Thermal Map: Red/Yellow highlights abnormal seabed texturing and acoustic shadow disruptions</div>
+            </div>
+        </div>
+
+        <div id="tab-boxes" class="tab-content">
+            <div class="view-card">
+                <img src="/files/{{ files.annotated }}" alt="YOLO BBoxes">
+                <div class="view-caption">Module A Bounding Boxes: Red for Ghost Gear, Orange for Manmade Contacts, Cyan for Unsupervised Anomalies</div>
+            </div>
+        </div>
+
+        <div id="tab-raw" class="tab-content">
+            <div class="view-card">
+                <img src="/files/{{ raw_filename }}" alt="Raw Sonar">
+                <div class="view-caption">Original Side-Scan Sonar Imagery (Grayscale Acoustic Backscatter)</div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0;">Detection & Anomaly Log</h3>
+            <a href="/download_report" class="download-btn">⬇️ Download report.csv</a>
+        </div>
+
         <table>
             <thead>
                 <tr>
                     <th>#</th>
-                    <th>Source Module</th>
+                    <th>Detection Source</th>
                     <th>Classification</th>
                     <th>Confidence / Peak Score</th>
-                    <th>Bounding Box (x1, y1, x2, y2)</th>
+                    <th>Coordinates (x1, y1, x2, y2)</th>
                 </tr>
             </thead>
             <tbody>
@@ -300,8 +380,8 @@ HTML_TEMPLATE = """
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="5" style="text-align: center; color: var(--text-muted);">
-                        No anomalous returns or objects detected above threshold. Normal seabed condition.
+                    <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">
+                        No targets or abnormal disturbances detected above threshold. Normal seafloor condition.
                     </td>
                 </tr>
                 {% endfor %}
@@ -309,6 +389,21 @@ HTML_TEMPLATE = """
         </table>
         {% endif %}
     </div>
+
+    <script>
+        function openTab(evt, tabId) {
+            var contents = document.getElementsByClassName("tab-content");
+            for (var i = 0; i < contents.length; i++) {
+                contents[i].classList.remove("active");
+            }
+            var buttons = document.getElementsByClassName("tab-btn");
+            for (var i = 0; i < buttons.length; i++) {
+                buttons[i].classList.remove("active");
+            }
+            document.getElementById(tabId).classList.add("active");
+            evt.currentTarget.classList.add("active");
+        }
+    </script>
 </body>
 </html>
 """
@@ -332,9 +427,7 @@ def analyze():
     file.save(str(raw_path))
 
     pipeline = get_pipeline()
-    annotated_img, detections = pipeline.run_detection(raw_path, output_dir=UPLOADS_DIR)
-
-    annotated_filename = f"annotated_{file.filename}"
+    bbox_img, detections, files = pipeline.run_detection(raw_path, output_dir=UPLOADS_DIR)
 
     count_ghost = sum(1 for d in detections if d["label"] == "ghost_gear")
     count_manmade = sum(1 for d in detections if d["label"] == "manmade_object")
@@ -344,7 +437,7 @@ def analyze():
         HTML_TEMPLATE,
         analyzed=True,
         raw_filename=file.filename,
-        annotated_filename=annotated_filename,
+        files=files,
         detections=detections,
         count_ghost=count_ghost,
         count_manmade=count_manmade,
@@ -354,20 +447,18 @@ def analyze():
 
 @app.route("/sample", methods=["GET"])
 def sample():
-    # Copy a sample from the test split
     test_dir = BASE_DIR / "data" / "processed" / "sss" / "images" / "test"
-    test_files = list(test_dir.glob("*.jpg"))
+    test_files = sorted(list(test_dir.glob("*.jpg")))
     if not test_files:
-        return "No test sample found. Run build_dataset.py first.", 404
+        return "No test samples available. Run build_dataset.py first.", 404
 
     target_sample = test_files[0] if "1" in request.args.get("name", "1") else test_files[-1]
     dest_path = UPLOADS_DIR / target_sample.name
     shutil.copy(target_sample, dest_path)
 
     pipeline = get_pipeline()
-    annotated_img, detections = pipeline.run_detection(dest_path, output_dir=UPLOADS_DIR)
+    bbox_img, detections, files = pipeline.run_detection(dest_path, output_dir=UPLOADS_DIR)
 
-    annotated_filename = f"annotated_{target_sample.name}"
     count_ghost = sum(1 for d in detections if d["label"] == "ghost_gear")
     count_manmade = sum(1 for d in detections if d["label"] == "manmade_object")
     count_anomaly = sum(1 for d in detections if d["label"] == "anomaly")
@@ -376,12 +467,20 @@ def sample():
         HTML_TEMPLATE,
         analyzed=True,
         raw_filename=target_sample.name,
-        annotated_filename=annotated_filename,
+        files=files,
         detections=detections,
         count_ghost=count_ghost,
         count_manmade=count_manmade,
         count_anomaly=count_anomaly,
     )
+
+
+@app.route("/download_report", methods=["GET"])
+def download_report():
+    report_file = BASE_DIR / "outputs" / "report.csv"
+    if report_file.exists():
+        return send_file(str(report_file), as_attachment=True, download_name="marinewatch_report.csv")
+    return "Report not generated yet.", 404
 
 
 @app.route("/files/<path:filename>")

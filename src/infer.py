@@ -1,12 +1,15 @@
 """
-MarineWatch — Phase 7: Inference & Dual-Module Fusion Pipeline
+MarineWatch — Phase 7 (Upgraded): Dual-Module Inference with Anomaly Heatmap
 
-Processes any side-scan sonar image:
-1. Slices image into 416x416 overlapping tiles.
-2. Runs Module A (YOLO-nano CPU / ONNX) -> maps boxes to full-image coordinates -> global NMS.
-3. Runs Module B (Convolutional Autoencoder) on 64x64 patches -> computes anomaly reconstruction map -> extracts connected regions.
-4. Performs fusion: retains all YOLO detections and flags non-overlapping high-anomaly seabed regions.
-5. Saves annotated visualization and generates report.csv.
+Features:
+1. Module A: YOLO-nano ONNX / CPU detection with tile-level slicing and global NMS.
+2. Module B: Native Patch Autoencoder Anomaly Mapping -> generates a thermal anomaly heatmap
+   (red-hot glow on strange seabed areas, calm blue on normal sand).
+3. Dual-Module Fusion: Combines known object boxes with non-overlapping unsupervised anomaly regions.
+4. Tri-view Visual Outputs:
+   - annotated_<img.jpg>: Bounding boxes with class labels and confidence.
+   - heatmap_<img.jpg>: Thermal acoustic anomaly heatmap overlay.
+   - fused_<img.jpg>: Combined view showing bounding boxes AND thermal anomaly glow together!
 """
 
 import os
@@ -43,7 +46,6 @@ class MarineWatchPipeline:
 
         # 1. Module A: YOLO-nano
         if yolo_path is None:
-            # Check for ONNX first, then PyTorch best.pt, then yolo11n.pt
             onnx_path = OUTPUTS_DIR / "sss_detector" / "weights" / "best.onnx"
             pt_path = OUTPUTS_DIR / "sss_detector" / "weights" / "best.pt"
             if onnx_path.exists():
@@ -64,7 +66,7 @@ class MarineWatchPipeline:
             threshold_path = MODELS_DIR / "anomaly_threshold.json"
 
         self.ae = None
-        self.anomaly_threshold = 0.015  # Fallback default
+        self.anomaly_threshold = 0.0075  # Default threshold
 
         if ae_path.exists():
             print(f"[Pipeline] Loading Module B (Autoencoder): {ae_path}")
@@ -75,12 +77,12 @@ class MarineWatchPipeline:
             if threshold_path.exists():
                 with open(threshold_path, "r", encoding="utf-8") as f:
                     meta = json.load(f)
-                    self.anomaly_threshold = meta.get("recommended_threshold", 0.015)
-                print(f"[Pipeline] Anomaly threshold loaded: {self.anomaly_threshold:.6f}")
+                    self.anomaly_threshold = meta.get("recommended_threshold", 0.0075)
+                print(f"[Pipeline] Calibrated anomaly threshold: {self.anomaly_threshold:.6f}")
         else:
             print("[Pipeline] Module B weights not found. Running in detector-only mode.")
 
-    def run_detection(self, image_path: Path, output_dir: Path = None) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    def run_detection(self, image_path: Path, output_dir: Path = None) -> Tuple[np.ndarray, List[Dict[str, Any]], Dict[str, str]]:
         if output_dir is None:
             output_dir = OUTPUTS_DIR
 
@@ -101,22 +103,19 @@ class MarineWatchPipeline:
         class_ids = []
 
         for crop, _, (x0, y0) in tile_image(img_3ch, [], tile=416, overlap=0.2):
-            th, tw = crop.shape[:2]
             results = self.detector.predict(crop, imgsz=416, device="cpu", conf=self.conf_thresh, verbose=False)
-            
             for res in results:
                 for box in res.boxes:
                     bx1, by1, bx2, by2 = box.xyxy[0].cpu().numpy()
                     score = float(box.conf[0].cpu().numpy())
                     cid = int(box.cls[0].cpu().numpy())
 
-                    # Map coordinates back to full image space
                     gx1 = int(round(x0 + bx1))
                     gy1 = int(round(y0 + by1))
                     gx2 = int(round(x0 + bx2))
                     gy2 = int(round(y0 + by2))
 
-                    raw_boxes.append([gx1, gy1, gx2 - gx1, gy2 - gy1])  # [x, y, w, h] for cv2 NMS
+                    raw_boxes.append([gx1, gy1, gx2 - gx1, gy2 - gy1])
                     confidences.append(score)
                     class_ids.append(cid)
 
@@ -138,9 +137,11 @@ class MarineWatchPipeline:
                     })
 
         # -------------------------------------------------------------
-        # STEP 3: Module B - Autoencoder Anomaly Mapping
+        # STEP 3: Module B - Thermal Anomaly Heatmap & Region Extraction
         # -------------------------------------------------------------
         anomaly_regions = []
+        heatmap_overlay = img_3ch.copy()
+
         if self.ae is not None:
             patch_size = 64
             step = 32
@@ -162,7 +163,6 @@ class MarineWatchPipeline:
                 batch_tensors = torch.cat(patches, dim=0)
                 with torch.no_grad():
                     recons = self.ae(batch_tensors)
-                    # MSE per patch
                     mses = torch.mean((batch_tensors - recons) ** 2, dim=[1, 2, 3]).numpy()
 
                 for (px, py), mse in zip(coords, mses):
@@ -172,16 +172,29 @@ class MarineWatchPipeline:
                 counts_map[counts_map == 0] = 1.0
                 avg_anomaly_map = anomaly_map / counts_map
 
-                # Threshold to create binary mask
+                # Generate Thermal Colormap for Anomaly Heatmap
+                # Clip and scale errors so threshold is the inflection point
+                v_min = np.percentile(avg_anomaly_map, 10)
+                v_max = max(self.anomaly_threshold * 2.0, float(np.percentile(avg_anomaly_map, 99.5)))
+                norm_map = np.clip((avg_anomaly_map - v_min) / (v_max - v_min + 1e-6), 0.0, 1.0)
+                heatmap_uint8 = (norm_map * 255).astype(np.uint8)
+
+                # Smooth the heatmap for clean visual thermal contouring
+                heatmap_blurred = cv2.GaussianBlur(heatmap_uint8, (15, 15), 0)
+                color_heatmap = cv2.applyColorMap(heatmap_blurred, cv2.COLORMAP_JET)
+
+                # Blend thermal heatmap over grayscale sonar image
+                heatmap_overlay = cv2.addWeighted(img_3ch, 0.60, color_heatmap, 0.40, 0)
+
+                # Threshold to extract connected anomaly bounding regions
                 binary_mask = (avg_anomaly_map > self.anomaly_threshold).astype(np.uint8) * 255
-                # Morphological filtering to remove single-pixel speckles
                 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
                 cleaned_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
 
-                num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(cleaned_mask)
+                num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned_mask)
                 for label_idx in range(1, num_labels):
                     area = stats[label_idx, cv2.CC_STAT_AREA]
-                    if area >= 200:  # Ignore tiny noise spots
+                    if area >= 200:
                         ax1 = stats[label_idx, cv2.CC_STAT_LEFT]
                         ay1 = stats[label_idx, cv2.CC_STAT_TOP]
                         aw = stats[label_idx, cv2.CC_STAT_WIDTH]
@@ -199,7 +212,7 @@ class MarineWatchPipeline:
                         })
 
         # -------------------------------------------------------------
-        # STEP 4: Fusion & Filtering (IoU < 0.1)
+        # STEP 4: Dual-Module Fusion (IoU < 0.1)
         # -------------------------------------------------------------
         final_detections = list(detector_detections)
 
@@ -226,9 +239,10 @@ class MarineWatchPipeline:
                 final_detections.append(anom)
 
         # -------------------------------------------------------------
-        # STEP 5: Annotate Image & Export Report
+        # STEP 5: Render Multi-View Output Images
         # -------------------------------------------------------------
-        annotated_img = img_3ch.copy()
+        # View A: Pure Bounding Boxes
+        bbox_img = img_3ch.copy()
         color_map = {
             "ghost_gear": (0, 0, 255),       # Red
             "manmade_object": (0, 165, 255), # Orange
@@ -237,15 +251,29 @@ class MarineWatchPipeline:
 
         for d in final_detections:
             color = color_map.get(d["label"], (0, 255, 0))
-            cv2.rectangle(annotated_img, (d["x1"], d["y1"]), (d["x2"], d["y2"]), color, 2)
+            cv2.rectangle(bbox_img, (d["x1"], d["y1"]), (d["x2"], d["y2"]), color, 2)
             lbl_txt = f"{d['label']} {d['score']:.2f} ({d['source'][:3]})"
-            cv2.putText(annotated_img, lbl_txt, (d["x1"], max(d["y1"] - 6, 12)),
+            cv2.putText(bbox_img, lbl_txt, (d["x1"], max(d["y1"] - 6, 12)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
-        # Save annotated image
-        out_img_name = f"annotated_{Path(image_path).name}"
-        out_img_path = output_dir / out_img_name
-        cv2.imwrite(str(out_img_path), annotated_img)
+        # View B: Combined Fused View (Heatmap + Bounding Boxes)
+        fused_img = heatmap_overlay.copy()
+        for d in final_detections:
+            color = color_map.get(d["label"], (0, 255, 0))
+            cv2.rectangle(fused_img, (d["x1"], d["y1"]), (d["x2"], d["y2"]), color, 2)
+            lbl_txt = f"{d['label']} {d['score']:.2f}"
+            cv2.putText(fused_img, lbl_txt, (d["x1"], max(d["y1"] - 6, 12)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+
+        # Save files
+        img_name = Path(image_path).name
+        annotated_path = output_dir / f"annotated_{img_name}"
+        heatmap_path = output_dir / f"heatmap_{img_name}"
+        fused_path = output_dir / f"fused_{img_name}"
+
+        cv2.imwrite(str(annotated_path), bbox_img)
+        cv2.imwrite(str(heatmap_path), heatmap_overlay)
+        cv2.imwrite(str(fused_path), fused_img)
 
         # Append to report.csv
         report_path = output_dir / "report.csv"
@@ -256,28 +284,27 @@ class MarineWatchPipeline:
                 writer.writerow(["image", "x1", "y1", "x2", "y2", "source", "label", "score"])
             for d in final_detections:
                 writer.writerow([
-                    Path(image_path).name,
+                    img_name,
                     d["x1"], d["y1"], d["x2"], d["y2"],
                     d["source"], d["label"], f"{d['score']:.4f}",
                 ])
 
-        print(f"[Inference] Detections found: {len(final_detections)} (Annotated image: {out_img_path})")
-        return annotated_img, final_detections
+        file_dict = {
+            "annotated": annotated_path.name,
+            "heatmap": heatmap_path.name,
+            "fused": fused_path.name,
+        }
+
+        print(f"[Inference] Finished: {len(final_detections)} detections logged. Heatmap & Fused views saved.")
+        return bbox_img, final_detections, file_dict
 
 
 def main():
-    if len(sys.argv) < 2:
-        # Run test on sample image from test split
-        test_images = list((BASE_DIR / "data" / "processed" / "sss" / "images" / "test").glob("*.jpg"))
-        if test_images:
-            sample_img = test_images[0]
-            print(f"[Inference] No image provided. Using test sample: {sample_img}")
-        else:
-            print("Usage: python src/infer.py <path_to_sonar_image>")
-            return
-    else:
-        sample_img = Path(sys.argv[1])
-
+    test_images = list((BASE_DIR / "data" / "processed" / "sss" / "images" / "test").glob("*.jpg"))
+    if not test_images:
+        print("No test images found.")
+        return
+    sample_img = test_images[0]
     pipeline = MarineWatchPipeline()
     pipeline.run_detection(sample_img)
 

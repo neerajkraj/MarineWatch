@@ -1,12 +1,13 @@
 {
   "patch_size": 64,
   "input_channels": 1,
-  "threshold_95": 0.004810937400907273,
-  "threshold_99": 0.007253762222826478,
-  "threshold_995": 0.007876622362527994,
-  "recommended_threshold": 0.007253762222826478,
-  "mean_error": 0.002293628818458981,
-  "std_error": 0.0013251661626222926,
+  "native_patches": true,
+  "threshold_95": 0.01556585496291518,
+  "threshold_99": 0.02045928271487355,
+  "threshold_995": 0.02111165761947625,
+  "recommended_threshold": 0.02045928271487355,
+  "mean_error": 0.005242045295302281,
+  "std_error": 0.004856498236543033,
   "epochs": 20,
-  "final_val_loss": 0.0022936288360506296
+  "final_val_loss": 0.005242045223712921
 }
