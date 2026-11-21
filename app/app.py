@@ -24,7 +24,9 @@ from flask.json.provider import DefaultJSONProvider
 # Add src to python path
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC_DIR))
+import cv2
 from infer import MarineWatchPipeline
+from sonar_dsp import apply_acoustic_dsp_suite
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOADS_DIR = BASE_DIR / "outputs" / "dashboard_uploads"
@@ -126,6 +128,47 @@ def api_analyze():
         "counts": LAST_ANALYSIS["counts"],
         "meta": LAST_ANALYSIS["meta"],
         "latency": elapsed_ms,
+    })
+
+
+@app.route("/api/dsp_tune", methods=["POST"])
+def api_dsp_tune():
+    data = request.get_json() or {}
+    filename = data.get("filename", "")
+    if not filename:
+        return jsonify({"success": False, "error": "No filename specified"}), 400
+
+    target_path = UPLOADS_DIR / filename
+    if not target_path.exists():
+        target_path = UPLOADS_DIR / f"raw_{filename}"
+    if not target_path.exists():
+        return jsonify({"success": False, "error": f"File not found: {filename}"}), 404
+
+    clahe_clip = float(data.get("clahe_clip", 2.5))
+    enable_clahe = bool(data.get("enable_clahe", True))
+    enable_despeckle = bool(data.get("enable_despeckle", True))
+    enable_slant_range = bool(data.get("enable_slant_range", True))
+
+    img = cv2.imread(str(target_path))
+    if img is None:
+        return jsonify({"success": False, "error": "Unable to decode image"}), 400
+
+    enhanced, dsp_meta = apply_acoustic_dsp_suite(
+        img,
+        enable_clahe=enable_clahe,
+        enable_despeckle=enable_despeckle,
+        enable_slant_range=enable_slant_range,
+        clahe_clip=clahe_clip,
+    )
+
+    out_name = f"dsp_live_{filename}"
+    out_path = UPLOADS_DIR / out_name
+    cv2.imwrite(str(out_path), enhanced)
+
+    return jsonify({
+        "success": True,
+        "file": out_name,
+        "meta": dsp_meta,
     })
 
 

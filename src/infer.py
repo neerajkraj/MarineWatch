@@ -26,6 +26,13 @@ from ultralytics import YOLO
 
 from tile import tile_image
 from train_anomaly import AE
+from sonar_dsp import (
+    enhance_acoustic_clahe,
+    slant_to_ground_range,
+    despeckle_acoustic,
+    apply_acoustic_dsp_suite,
+    detect_water_column,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 MODELS_DIR = BASE_DIR / "models"
@@ -470,6 +477,21 @@ class MarineWatchPipeline:
         cv2.imwrite(str(heatmap_path), heatmap_overlay)
         cv2.imwrite(str(fused_path), fused_img)
 
+        # -------------------------------------------------------------
+        # STEP 6: Option 2 — Hydrographic Acoustic Signal DSP & Slant Range
+        # -------------------------------------------------------------
+        dsp_clahe_img = enhance_acoustic_clahe(img_3ch, clip_limit=2.5)
+        dsp_slant_img, nadir_x, alt_px = slant_to_ground_range(img_3ch)
+        dsp_enhanced_img, dsp_meta = apply_acoustic_dsp_suite(img_3ch)
+
+        dsp_clahe_path = output_dir / f"dsp_clahe_{img_name}"
+        dsp_slant_path = output_dir / f"dsp_slant_{img_name}"
+        dsp_enhanced_path = output_dir / f"dsp_enhanced_{img_name}"
+
+        cv2.imwrite(str(dsp_clahe_path), dsp_clahe_img)
+        cv2.imwrite(str(dsp_slant_path), dsp_slant_img)
+        cv2.imwrite(str(dsp_enhanced_path), dsp_enhanced_img)
+
         # Append to report.csv
         report_path = output_dir / "report.csv"
         write_header = not report_path.exists()
@@ -493,15 +515,21 @@ class MarineWatchPipeline:
             "annotated": annotated_path.name,
             "heatmap": heatmap_path.name,
             "fused": fused_path.name,
+            "dsp_clahe": dsp_clahe_path.name,
+            "dsp_slant": dsp_slant_path.name,
+            "dsp_enhanced": dsp_enhanced_path.name,
         }
 
         meta = {
-            "width": w,
-            "height": h,
+            "width": int(w),
+            "height": int(h),
             "filename": img_name,
             "total_detections": len(final_detections),
             "anomaly_threshold_used": float(current_anomaly_th),
             "conf_thresh_used": float(current_conf),
+            "nadir_x": int(nadir_x),
+            "altitude_px": int(alt_px),
+            "dsp_latency_ms": float(dsp_meta.get("dsp_latency_ms", 0.0)),
         }
 
         print(f"[Inference] Finished: {len(final_detections)} detections logged. Heatmap & Fused views saved.")

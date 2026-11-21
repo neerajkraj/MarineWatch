@@ -591,6 +591,15 @@
                     <button class="tab-btn" id="tab-raw" onclick="switchView('raw')">
                         <i class="fa-solid fa-image"></i> Raw Sonar
                     </button>
+                    <button class="tab-btn" id="tab-clahe" onclick="switchView('clahe')">
+                        <i class="fa-solid fa-wand-magic-sparkles" style="color: #38bdf8;"></i> CLAHE
+                    </button>
+                    <button class="tab-btn" id="tab-slant" onclick="switchView('slant')">
+                        <i class="fa-solid fa-ruler-combined" style="color: #34d399;"></i> Slant-Range
+                    </button>
+                    <button class="tab-btn" id="tab-dsp" onclick="switchView('dsp')">
+                        <i class="fa-solid fa-wave-square" style="color: #fbbf24;"></i> DSP Suite
+                    </button>
                 </div>
 
                 <div class="summary-tag" id="summary-badges">
@@ -598,6 +607,7 @@
                     <span class="badge-pill ghost" id="badge-ghost">0 Ghost Gear</span>
                     <span class="badge-pill manmade" id="badge-manmade">0 Contacts</span>
                     <span class="badge-pill anomaly" id="badge-anomaly">0 Anomalies</span>
+                    <span class="badge-pill" id="badge-altitude" style="display:none; background: rgba(52, 211, 153, 0.15); color: #34d399;"><i class="fa-solid fa-water"></i> <span id="val-altitude">-</span></span>
                     <span class="badge-pill" style="background: rgba(56, 189, 248, 0.15); color: var(--accent);"><i class="fa-solid fa-shield-halved"></i> TTA + Soft-NMS</span>
                     <span style="font-size: 11.5px; color: var(--text-dim);" id="label-latency">- ms</span>
                 </div>
@@ -803,6 +813,14 @@
             document.getElementById('badge-anomaly').textContent = (data.counts.anomaly || 0) + ' Anomalies';
             document.getElementById('label-latency').textContent = (data.latency || 115) + ' ms';
 
+            // Display hydrographic towfish altitude if available
+            const altEl = document.getElementById('badge-altitude');
+            if (altEl && data.meta && data.meta.altitude_px) {
+                altEl.style.display = 'inline-flex';
+                const meters = (data.meta.altitude_px * 0.05).toFixed(1);
+                document.getElementById('val-altitude').textContent = `Alt: ${data.meta.altitude_px}px (~${meters}m)`;
+            }
+
             // Set images
             sideRawImg.src = '/files/' + data.files.raw;
             sideFusedImg.src = '/files/' + data.files.fused;
@@ -813,12 +831,12 @@
 
         function switchView(tabKey) {
             currentTab = tabKey;
-            ['fused', 'side', 'heatmap', 'boxes', 'raw'].forEach(k => {
+            ['fused', 'side', 'heatmap', 'boxes', 'raw', 'clahe', 'slant', 'dsp'].forEach(k => {
                 const btn = document.getElementById('tab-' + k);
                 if (btn) btn.classList.toggle('active', k === tabKey);
             });
 
-            if (!currentData) return;
+            if (!currentData || !currentData.files) return;
 
             if (tabKey === 'side') {
                 mainImg.style.display = 'none';
@@ -831,6 +849,9 @@
                 else if (tabKey === 'heatmap') mainImg.src = '/files/' + currentData.files.heatmap;
                 else if (tabKey === 'boxes') mainImg.src = '/files/' + currentData.files.annotated;
                 else if (tabKey === 'raw') mainImg.src = '/files/' + currentData.files.raw;
+                else if (tabKey === 'clahe') mainImg.src = '/files/' + (currentData.files.dsp_clahe || currentData.files.raw);
+                else if (tabKey === 'slant') mainImg.src = '/files/' + (currentData.files.dsp_slant || currentData.files.raw);
+                else if (tabKey === 'dsp') mainImg.src = '/files/' + (currentData.files.dsp_enhanced || currentData.files.raw);
             }
         }
 
