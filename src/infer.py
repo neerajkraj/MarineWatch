@@ -95,7 +95,12 @@ def apply_soft_nms(
 
             for i in range(len(c_boxes)):
                 iou = compute_box_iou(max_box.tolist(), c_boxes[i].tolist())
-                if iou > 0.0:
+                if iou >= 0.45:
+                    # Same physical target detected multiple times (e.g. from TTA flip or overlapping tiles)
+                    # Discard duplicate to prevent two boxes rendering on top of each other
+                    c_scores[i] = 0.0
+                elif iou > 0.0:
+                    # Adjacent touching objects (e.g. clustered crab pots in a line): apply smooth Gaussian decay
                     weight = np.exp(-(iou * iou) / sigma)
                     c_scores[i] *= weight
 
