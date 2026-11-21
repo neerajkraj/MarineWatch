@@ -506,6 +506,7 @@
                     <span class="badge-pill ghost" id="badge-ghost">0 Ghost Gear</span>
                     <span class="badge-pill manmade" id="badge-manmade">0 Contacts</span>
                     <span class="badge-pill anomaly" id="badge-anomaly">0 Anomalies</span>
+                    <span class="badge-pill" style="background: rgba(56, 189, 248, 0.15); color: var(--accent);"><i class="fa-solid fa-shield-halved"></i> TTA + Soft-NMS</span>
                     <span style="font-size: 11.5px; color: var(--text-dim);" id="label-latency">- ms</span>
                 </div>
             </div>
@@ -582,6 +583,7 @@
                         <th style="width: 50px;">ID</th>
                         <th>Classification</th>
                         <th>Confidence</th>
+                        <th>Acoustic Shadow</th>
                         <th>Target Dimensions</th>
                         <th>Coordinates (x1, y1, x2, y2)</th>
                         <th>Detection Engine</th>
@@ -589,7 +591,7 @@
                 </thead>
                 <tbody id="targets-body">
                     <tr>
-                        <td colspan="6" style="text-align: center; color: var(--text-dim); padding: 24px;">
+                        <td colspan="7" style="text-align: center; color: var(--text-dim); padding: 24px;">
                             Loading survey sample...
                         </td>
                     </tr>
@@ -753,11 +755,20 @@
                     labelText = 'Manmade Contact';
                 }
 
+                let shadowBadge = '<span style="color: var(--text-dim); font-size: 11px;">Low Shadow</span>';
+                if (d.has_shadow) {
+                    const contrastPct = Math.round((d.shadow_contrast || 0) * 100);
+                    shadowBadge = `<span class="tag-pill" style="background: rgba(56, 189, 248, 0.15); color: var(--accent);"><i class="fa-solid fa-moon"></i> Confirmed (+${contrastPct}%)</span>`;
+                } else if (d.label === 'anomaly') {
+                    shadowBadge = '<span style="color: var(--text-dim); font-size: 11px;">Texture Disturbance</span>';
+                }
+
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td style="color: var(--accent); font-weight: 600;">#${d.id || (idx + 1)}</td>
                     <td><span class="tag-pill ${badgeClass}">${labelText}</span></td>
                     <td style="font-weight: 600;">${(d.score * 100).toFixed(1)}%</td>
+                    <td>${shadowBadge}</td>
                     <td>${d.width} × ${d.height} px</td>
                     <td style="color: var(--text-dim); font-family: monospace;">(${d.x1}, ${d.y1}, ${d.x2}, ${d.y2})</td>
                     <td style="color: var(--text-dim); font-size: 12px;">${d.source}</td>

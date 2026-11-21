@@ -32,6 +32,126 @@ MODELS_DIR = BASE_DIR / "models"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 
 
+def compute_box_iou(b1: List[float], b2: List[float]) -> float:
+    """Computes Intersection-over-Union for [x1, y1, x2, y2]."""
+    ix1 = max(b1[0], b2[0])
+    iy1 = max(b1[1], b2[1])
+    ix2 = min(b1[2], b2[2])
+    iy2 = min(b1[3], b2[3])
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    area1 = max(0.0, (b1[2] - b1[0]) * (b1[3] - b1[1]))
+    area2 = max(0.0, (b2[2] - b2[0]) * (b2[3] - b2[1]))
+    union = area1 + area2 - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
+def apply_soft_nms(
+    boxes: List[List[float]],
+    scores: List[float],
+    class_ids: List[int],
+    sigma: float = 0.5,
+    score_thresh: float = 0.12,
+    iou_thresh: float = 0.45,
+) -> Tuple[List[List[float]], List[float], List[int]]:
+    """
+    Soft-NMS with Gaussian decay to preserve clustered crab pot strings
+    and adjacent debris without abruptly dropping overlapping boxes.
+    """
+    if not boxes:
+        return [], [], []
+
+    boxes_arr = np.array(boxes, dtype=np.float32)
+    scores_arr = np.array(scores, dtype=np.float32)
+    classes_arr = np.array(class_ids, dtype=np.int32)
+
+    kept_boxes = []
+    kept_scores = []
+    kept_classes = []
+
+    for cid in np.unique(classes_arr):
+        mask = classes_arr == cid
+        c_boxes = boxes_arr[mask].copy()
+        c_scores = scores_arr[mask].copy()
+
+        while len(c_boxes) > 0:
+            max_idx = int(np.argmax(c_scores))
+            max_box = c_boxes[max_idx]
+            max_score = float(c_scores[max_idx])
+
+            if max_score < score_thresh:
+                break
+
+            kept_boxes.append(max_box.tolist())
+            kept_scores.append(max_score)
+            kept_classes.append(int(cid))
+
+            c_boxes = np.delete(c_boxes, max_idx, axis=0)
+            c_scores = np.delete(c_scores, max_idx, axis=0)
+
+            if len(c_boxes) == 0:
+                break
+
+            for i in range(len(c_boxes)):
+                iou = compute_box_iou(max_box.tolist(), c_boxes[i].tolist())
+                if iou > 0.0:
+                    weight = np.exp(-(iou * iou) / sigma)
+                    c_scores[i] *= weight
+
+    return kept_boxes, kept_scores, kept_classes
+
+
+def verify_acoustic_shadow(
+    gray_img: np.ndarray,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    raw_score: float,
+) -> Tuple[float, bool, float]:
+    """
+    Physics-Informed Acoustic Shadow Verifier:
+    Legitimate seabed debris reflects sound (bright highlight) and occludes sound behind it (dark acoustic shadow).
+    Natural sediment ripples lack deep trailing acoustic shadows.
+    """
+    h_img, w_img = gray_img.shape[:2]
+    bw = max(1, x2 - x1)
+    bh = max(1, y2 - y1)
+
+    obj_patch = gray_img[y1:y2, x1:x2]
+    obj_mean = float(np.mean(obj_patch)) if obj_patch.size > 0 else 128.0
+
+    # Sample adjacent downstream trailing shadow region
+    sy1 = min(h_img, y2)
+    sy2 = min(h_img, y2 + int(bh * 1.2) + 4)
+    sx1 = max(0, x1 - 2)
+    sx2 = min(w_img, x2 + 2)
+    shadow_patch = gray_img[sy1:sy2, sx1:sx2]
+    shadow_mean = float(np.mean(shadow_patch)) if shadow_patch.size > 0 else obj_mean
+
+    # Sample ambient background ring around contact
+    by1 = max(0, y1 - int(bh * 0.4))
+    by2 = min(h_img, y2 + int(bh * 0.4))
+    bx1 = max(0, x1 - int(bw * 0.4))
+    bx2 = min(w_img, x2 + int(bw * 0.4))
+    ambient_patch = gray_img[by1:by2, bx1:bx2]
+    ambient_mean = float(np.mean(ambient_patch)) if ambient_patch.size > 0 else 100.0
+
+    # Contrast metrics
+    shadow_contrast = max(0.0, (ambient_mean - shadow_mean) / (ambient_mean + 1e-4))
+    has_shadow = (shadow_mean < ambient_mean * 0.90) and (shadow_contrast >= 0.10)
+
+    if has_shadow:
+        # Physical acoustic shadow confirmed -> boost confidence score
+        adjusted_score = min(0.99, raw_score + 0.05 * (1.0 + shadow_contrast))
+    else:
+        # High reflection without trailing shadow indicates sediment ripple or seabed texture
+        adjusted_score = max(0.05, raw_score - 0.08)
+
+    return adjusted_score, has_shadow, float(shadow_contrast)
+
+
 class MarineWatchPipeline:
     def __init__(
         self,
@@ -88,6 +208,8 @@ class MarineWatchPipeline:
         output_dir: Path = None,
         conf_thresh: float = None,
         anomaly_threshold: float = None,
+        use_tta: bool = True,
+        use_shadow_filter: bool = True,
     ) -> Tuple[np.ndarray, List[Dict[str, Any]], Dict[str, str], Dict[str, int]]:
         if output_dir is None:
             output_dir = OUTPUTS_DIR
@@ -106,44 +228,78 @@ class MarineWatchPipeline:
         current_anomaly_th = anomaly_threshold if anomaly_threshold is not None else self.anomaly_threshold
 
         # -------------------------------------------------------------
-        # STEP 1 & 2: Module A - Tiled YOLO Detection
+        # STEP 1 & 2: Module A - Tiled YOLO Detection with TTA & Soft-NMS
         # -------------------------------------------------------------
-        raw_boxes = []
+        raw_boxes_xyxy = []
         confidences = []
         class_ids = []
 
         for crop, _, (x0, y0) in tile_image(img_3ch, [], tile=416, overlap=0.2):
-            results = self.detector.predict(crop, imgsz=416, device="cpu", conf=current_conf, verbose=False)
+            th, tw = crop.shape[:2]
+
+            # Pass 1: Standard orientation
+            results = self.detector.predict(crop, imgsz=416, device="cpu", conf=current_conf * 0.85, verbose=False)
             for res in results:
                 for box in res.boxes:
                     bx1, by1, bx2, by2 = box.xyxy[0].cpu().numpy()
                     score = float(box.conf[0].cpu().numpy())
                     cid = int(box.cls[0].cpu().numpy())
-
-                    gx1 = int(round(x0 + bx1))
-                    gy1 = int(round(y0 + by1))
-                    gx2 = int(round(x0 + bx2))
-                    gy2 = int(round(y0 + by2))
-
-                    raw_boxes.append([gx1, gy1, gx2 - gx1, gy2 - gy1])
+                    raw_boxes_xyxy.append([float(x0 + bx1), float(y0 + by1), float(x0 + bx2), float(y0 + by2)])
                     confidences.append(score)
                     class_ids.append(cid)
 
-        # Global NMS across overlapping tiles
+            # Pass 2: TTA Horizontal Flip (Acoustic angle reflection)
+            if use_tta:
+                crop_flip = cv2.flip(crop, 1)
+                results_flip = self.detector.predict(crop_flip, imgsz=416, device="cpu", conf=current_conf * 0.85, verbose=False)
+                for res in results_flip:
+                    for box in res.boxes:
+                        bx1_f, by1_f, bx2_f, by2_f = box.xyxy[0].cpu().numpy()
+                        score = float(box.conf[0].cpu().numpy())
+                        cid = int(box.cls[0].cpu().numpy())
+
+                        bx1_unflip = tw - bx2_f
+                        bx2_unflip = tw - bx1_f
+                        raw_boxes_xyxy.append([float(x0 + bx1_unflip), float(y0 + by1_f), float(x0 + bx2_unflip), float(y0 + by2_f)])
+                        confidences.append(score)
+                        class_ids.append(cid)
+
+        # Soft-NMS across all overlapping candidates (preserves dense pot lines)
         detector_detections = []
-        if raw_boxes:
-            indices = cv2.dnn.NMSBoxes(raw_boxes, confidences, self.conf_thresh, self.iou_thresh)
-            if len(indices) > 0:
-                for idx in indices.flatten():
-                    x, y, bw, bh = raw_boxes[idx]
+        if raw_boxes_xyxy:
+            kept_boxes, kept_scores, kept_classes = apply_soft_nms(
+                raw_boxes_xyxy,
+                confidences,
+                class_ids,
+                sigma=0.5,
+                score_thresh=current_conf * 0.80,
+                iou_thresh=self.iou_thresh,
+            )
+
+            # Physics-Informed Acoustic Shadow Verification
+            for box, score, cid in zip(kept_boxes, kept_scores, kept_classes):
+                gx1, gy1, gx2, gy2 = [int(round(v)) for v in box]
+                gx1 = max(0, min(w - 1, gx1))
+                gy1 = max(0, min(h - 1, gy1))
+                gx2 = max(0, min(w, gx2))
+                gy2 = max(0, min(h, gy2))
+
+                if use_shadow_filter:
+                    adj_score, has_shadow, shadow_contrast = verify_acoustic_shadow(gray, gx1, gy1, gx2, gy2, score)
+                else:
+                    adj_score, has_shadow, shadow_contrast = score, True, 0.0
+
+                if adj_score >= current_conf:
                     detector_detections.append({
-                        "x1": max(0, x),
-                        "y1": max(0, y),
-                        "x2": min(w, x + bw),
-                        "y2": min(h, y + bh),
-                        "source": "Module A (YOLO)",
-                        "label": self.class_names.get(class_ids[idx], "contact"),
-                        "score": confidences[idx],
+                        "x1": gx1,
+                        "y1": gy1,
+                        "x2": gx2,
+                        "y2": gy2,
+                        "source": "Module A (YOLO+TTA)",
+                        "label": self.class_names.get(cid, "contact"),
+                        "score": float(adj_score),
+                        "has_shadow": bool(has_shadow),
+                        "shadow_contrast": round(float(shadow_contrast), 3),
                     })
 
         # -------------------------------------------------------------
@@ -300,7 +456,7 @@ class MarineWatchPipeline:
         with open(report_path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             if write_header:
-                writer.writerow(["image", "id", "x1", "y1", "x2", "y2", "width", "height", "source", "label", "score"])
+                writer.writerow(["image", "id", "x1", "y1", "x2", "y2", "width", "height", "source", "label", "score", "has_shadow", "shadow_contrast"])
             for d in final_detections:
                 writer.writerow([
                     img_name,
@@ -308,6 +464,8 @@ class MarineWatchPipeline:
                     d["x1"], d["y1"], d["x2"], d["y2"],
                     d.get("width", ""), d.get("height", ""),
                     d["source"], d["label"], f"{d['score']:.4f}",
+                    d.get("has_shadow", False),
+                    d.get("shadow_contrast", 0.0),
                 ])
 
         file_dict = {
