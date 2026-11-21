@@ -254,6 +254,7 @@
                 <th style="width: 40px;">#</th>
                 <th>Classification</th>
                 <th>Confidence</th>
+                <th>Acoustic Verification</th>
                 <th>Dimensions (W × H)</th>
                 <th>Bounding Coordinates</th>
                 <th>Detection Source</th>
@@ -273,13 +274,22 @@
                     {% endif %}
                 </td>
                 <td><strong>{{ (d.score * 100)|round(1) }}%</strong></td>
+                <td>
+                    {% if d.has_shadow %}
+                        <span style="color: #0369a1; font-weight: 600;">Shadow Confirmed (+{{ (d.shadow_contrast * 100)|round|int }}%)</span>
+                    {% elif d.label == 'anomaly' %}
+                        <span style="color: #15803d; font-weight: 600;">Seabed Disturbance</span>
+                    {% else %}
+                        <span style="color: #64748b;">Low Shadow</span>
+                    {% endif %}
+                </td>
                 <td>{{ d.width }} × {{ d.height }} px</td>
                 <td>({{ d.x1 }}, {{ d.y1 }}, {{ d.x2 }}, {{ d.y2 }})</td>
                 <td>{{ d.source }}</td>
             </tr>
             {% else %}
             <tr>
-                <td colspan="6" style="text-align: center; color: #64748b; padding: 20px;">
+                <td colspan="7" style="text-align: center; color: #64748b; padding: 20px;">
                     No targets detected. Seafloor confirmed clear.
                 </td>
             </tr>

@@ -372,6 +372,11 @@ class MarineWatchPipeline:
                         ah = int(stats[label_idx, cv2.CC_STAT_HEIGHT])
                         peak_score = float(np.max(avg_anomaly_map[labels == label_idx]))
 
+                        # Calculate normalized anomaly confidence score (50% to 99%)
+                        # Threshold is calibrated 99th percentile of normal seabed (baseline 50% confidence)
+                        excess_ratio = (peak_score - current_anomaly_th) / max(1e-5, current_anomaly_th)
+                        norm_conf = float(np.clip(0.50 + 0.50 * excess_ratio, 0.50, 0.99))
+
                         anomaly_regions.append({
                             "x1": int(ax1),
                             "y1": int(ay1),
@@ -379,7 +384,8 @@ class MarineWatchPipeline:
                             "y2": int(ay1 + ah),
                             "source": "Module B (AE)",
                             "label": "anomaly",
-                            "score": float(peak_score),
+                            "score": float(norm_conf),
+                            "raw_mse": float(peak_score),
                             "has_shadow": False,
                             "shadow_contrast": 0.0,
                         })

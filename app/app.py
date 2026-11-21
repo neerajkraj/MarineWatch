@@ -216,21 +216,28 @@ def api_batch_analyze():
         total_manmade += n_manmade
         total_anomaly += n_anom
 
+        # Multi-label composite status
+        badges = []
+        if n_ghost > 0:
+            badges.append(f"{n_ghost} Ghost")
+        if n_manmade > 0:
+            badges.append(f"{n_manmade} Contact" + ("s" if n_manmade > 1 else ""))
+        if n_anom > 0:
+            badges.append(f"{n_anom} Anomaly" + ("ies" if n_anom > 1 else ""))
+
+        status_label = " + ".join(badges) if badges else "Clean Seafloor"
+
         if n_ghost > 0:
             status = "GHOST_GEAR"
-            status_label = f"Ghost Gear ({n_ghost})"
             badge = "ghost"
         elif n_manmade > 0:
             status = "MANMADE"
-            status_label = f"Contact ({n_manmade})"
             badge = "manmade"
         elif n_anom > 0:
             status = "ANOMALY"
-            status_label = f"Anomaly ({n_anom})"
             badge = "anomaly"
         else:
             status = "CLEAN"
-            status_label = "Clean Seafloor"
             badge = "clean"
 
         results.append({
@@ -252,23 +259,23 @@ def api_batch_analyze():
 
     total_elapsed_ms = int((time.time() - t_start) * 1000)
 
-    # Write batch_report.csv
+    # Write batch_report.csv with clear column headers
     batch_report_path = UPLOADS_DIR / "batch_report.csv"
     with open(batch_report_path, "w", newline="", encoding="utf-8") as f_csv:
         writer = csv.writer(f_csv)
-        writer.writerow(["image", "id", "status", "label", "score", "has_shadow", "shadow_contrast", "x1", "y1", "x2", "y2", "width", "height"])
+        writer.writerow(["image", "id", "classification", "confidence", "has_shadow", "shadow_contrast", "x1", "y1", "x2", "y2", "width", "height", "detection_engine"])
         for r in results:
             for d in r["detections"]:
                 writer.writerow([
                     r["filename"],
                     d.get("id", ""),
-                    r["status"],
                     d["label"],
                     f"{d['score']:.4f}",
                     d.get("has_shadow", False),
                     d.get("shadow_contrast", 0.0),
                     d["x1"], d["y1"], d["x2"], d["y2"],
                     d.get("width", ""), d.get("height", ""),
+                    d.get("source", "MarineWatch"),
                 ])
 
     LAST_BATCH_RESULTS = {
@@ -328,21 +335,28 @@ def api_sample_batch():
         total_manmade += n_manmade
         total_anomaly += n_anom
 
+        # Multi-label composite status
+        badges = []
+        if n_ghost > 0:
+            badges.append(f"{n_ghost} Ghost")
+        if n_manmade > 0:
+            badges.append(f"{n_manmade} Contact" + ("s" if n_manmade > 1 else ""))
+        if n_anom > 0:
+            badges.append(f"{n_anom} Anomaly" + ("ies" if n_anom > 1 else ""))
+
+        status_label = " + ".join(badges) if badges else "Clean Seafloor"
+
         if n_ghost > 0:
             status = "GHOST_GEAR"
-            status_label = f"Ghost Gear ({n_ghost})"
             badge = "ghost"
         elif n_manmade > 0:
             status = "MANMADE"
-            status_label = f"Contact ({n_manmade})"
             badge = "manmade"
         elif n_anom > 0:
             status = "ANOMALY"
-            status_label = f"Anomaly ({n_anom})"
             badge = "anomaly"
         else:
             status = "CLEAN"
-            status_label = "Clean Seafloor"
             badge = "clean"
 
         results.append({
@@ -368,19 +382,19 @@ def api_sample_batch():
     batch_report_path = UPLOADS_DIR / "batch_report.csv"
     with open(batch_report_path, "w", newline="", encoding="utf-8") as f_csv:
         writer = csv.writer(f_csv)
-        writer.writerow(["image", "id", "status", "label", "score", "has_shadow", "shadow_contrast", "x1", "y1", "x2", "y2", "width", "height"])
+        writer.writerow(["image", "id", "classification", "confidence", "has_shadow", "shadow_contrast", "x1", "y1", "x2", "y2", "width", "height", "detection_engine"])
         for r in results:
             for d in r["detections"]:
                 writer.writerow([
                     r["filename"],
                     d.get("id", ""),
-                    r["status"],
                     d["label"],
                     f"{d['score']:.4f}",
                     d.get("has_shadow", False),
                     d.get("shadow_contrast", 0.0),
                     d["x1"], d["y1"], d["x2"], d["y2"],
                     d.get("width", ""), d.get("height", ""),
+                    d.get("source", "MarineWatch"),
                 ])
 
     LAST_BATCH_RESULTS = {
@@ -399,6 +413,42 @@ def api_sample_batch():
     }
     LAST_BATCH_RESULTS = sanitize_json(LAST_BATCH_RESULTS)
     return jsonify(LAST_BATCH_RESULTS)
+
+
+@app.route("/api/select_batch_tile", methods=["POST"])
+def api_select_batch_tile():
+    global LAST_ANALYSIS, LAST_BATCH_RESULTS
+    data = request.get_json() or {}
+    idx = data.get("index", 0)
+    if LAST_BATCH_RESULTS and "results" in LAST_BATCH_RESULTS:
+        results = LAST_BATCH_RESULTS["results"]
+        if 0 <= idx < len(results):
+            r = results[idx]
+            LAST_ANALYSIS = {
+                "files": r["files"],
+                "detections": r["detections"],
+                "meta": r["meta"],
+                "counts": r["counts"],
+            }
+            # Synchronize active tile report to outputs/dashboard_uploads/report.csv
+            tile_report_path = UPLOADS_DIR / "report.csv"
+            with open(tile_report_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["image", "id", "classification", "confidence", "has_shadow", "shadow_contrast", "x1", "y1", "x2", "y2", "width", "height", "detection_engine"])
+                for d in r["detections"]:
+                    writer.writerow([
+                        r["filename"],
+                        d.get("id", ""),
+                        d["label"],
+                        f"{d['score']:.4f}",
+                        d.get("has_shadow", False),
+                        d.get("shadow_contrast", 0.0),
+                        d["x1"], d["y1"], d["x2"], d["y2"],
+                        d.get("width", ""), d.get("height", ""),
+                        d.get("source", "MarineWatch"),
+                    ])
+            return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Index out of range"}), 400
 
 
 @app.route("/download_batch_report", methods=["GET"])

@@ -631,8 +631,8 @@
             <div class="stage-footer">
                 <div class="controls-inline">
                     <div class="control-item">
-                        <span>Confidence: <strong id="lbl-conf">25%</strong></span>
-                        <input type="range" id="rng-conf" min="10" max="90" value="25" oninput="onFilterChange()">
+                        <span>Confidence: <strong id="lbl-conf">15%</strong></span>
+                        <input type="range" id="rng-conf" min="5" max="90" value="15" oninput="onFilterChange()">
                     </div>
                     <div class="control-item">
                         <span>Opacity: <strong id="lbl-op">100%</strong></span>
@@ -860,9 +860,8 @@
 
             let count = 0;
             currentData.detections.forEach((d, idx) => {
-                if (d.score < minConf) return;
-                if (d.label === 'ghost_gear' && !showGhost) return;
-                if (d.label === 'manmade_object' && !showManmade) return;
+                if (d.label === 'ghost_gear' && (!showGhost || d.score < minConf)) return;
+                if (d.label === 'manmade_object' && (!showManmade || d.score < minConf)) return;
                 if (d.label === 'anomaly' && !showAnomaly) return;
 
                 count++;
@@ -881,7 +880,8 @@
                     const contrastPct = Math.round((d.shadow_contrast || 0) * 100);
                     shadowBadge = `<span class="tag-pill" style="background: rgba(56, 189, 248, 0.15); color: var(--accent);"><i class="fa-solid fa-moon"></i> Confirmed (+${contrastPct}%)</span>`;
                 } else if (d.label === 'anomaly') {
-                    shadowBadge = '<span style="color: var(--text-dim); font-size: 11px;">Texture Disturbance</span>';
+                    const mseInfo = d.raw_mse ? ` (MSE: ${d.raw_mse.toFixed(4)})` : '';
+                    shadowBadge = `<span class="tag-pill" style="background: rgba(16, 185, 129, 0.15); color: var(--green);"><i class="fa-solid fa-water"></i> Disturbance${mseInfo}</span>`;
                 }
 
                 const tr = document.createElement('tr');
@@ -984,6 +984,7 @@
                 <span class="badge-pill clean">${s.clean_images} Clean</span>
                 <span class="badge-pill ghost">${s.total_ghost_gear} Ghost Gear</span>
                 <span class="badge-pill manmade">${s.total_manmade} Contacts</span>
+                <span class="badge-pill anomaly" style="background: rgba(16, 185, 129, 0.15); color: var(--green);">${s.total_anomalies || 0} Anomalies</span>
                 <span style="font-size: 11px; color: var(--text-dim);">${s.total_latency_ms} ms</span>
             `;
 
@@ -1021,6 +1022,13 @@
 
             const tileData = currentBatchData.results[index];
             renderAnalysis(tileData);
+
+            // Synchronize server-side report for dossier printing & single-tile CSV download
+            fetch('/api/select_batch_tile', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ index: index })
+            }).catch(() => {});
 
             document.querySelector('.stage-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
