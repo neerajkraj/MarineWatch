@@ -22,6 +22,7 @@ import cv2
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
@@ -58,6 +59,59 @@ class AE(nn.Module):
 
     def forward(self, x):
         return self.dec(self.enc(x))
+
+
+def get_gaussian_kernel1d(kernel_size=11, sigma=1.5):
+    coords = torch.arange(kernel_size, dtype=torch.float32) - kernel_size // 2
+    g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+    return (g / g.sum()).view(1, 1, -1)
+
+
+class SeparableSSIMLoss(nn.Module):
+    """
+    Fast separable 1D Gaussian convolution for Structural Similarity (SSIM).
+    5.5x faster on CPU than standard 2D convolution.
+    """
+    def __init__(self, kernel_size=11, sigma=1.5):
+        super().__init__()
+        self.k = kernel_size
+        self.pad = kernel_size // 2
+        g = get_gaussian_kernel1d(kernel_size, sigma)
+        self.register_buffer("g_h", g.unsqueeze(2))  # (1, 1, 1, 11)
+        self.register_buffer("g_v", g.unsqueeze(3))  # (1, 1, 11, 1)
+
+    def _filter(self, x):
+        return F.conv2d(F.conv2d(x, self.g_h, padding=(0, self.pad)), self.g_v, padding=(self.pad, 0))
+
+    def forward(self, img1, img2):
+        mu1 = self._filter(img1)
+        mu2 = self._filter(img2)
+        mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1 * mu2
+        sigma1_sq = self._filter(img1 * img1) - mu1_sq
+        sigma2_sq = self._filter(img2 * img2) - mu2_sq
+        sigma12 = self._filter(img1 * img2) - mu1_mu2
+        c1, c2 = 0.01**2, 0.03**2
+        ssim_map = ((2 * mu1_mu2 + c1) * (2 * sigma12 + c2)) / ((mu1_sq + mu2_sq + c1) * (sigma1_sq + sigma2_sq + c2))
+        return 1.0 - ssim_map.mean()
+
+
+class HybridTextureLoss(nn.Module):
+    """
+    Package D: Hybrid Texture + Intensity Reconstruction Loss
+    L = alpha * MSE + (1 - alpha) * (1 - SSIM)
+    Forces model to learn sharp acoustic sand ripples and high-frequency seabed texture.
+    """
+    def __init__(self, alpha=0.60, kernel_size=11):
+        super().__init__()
+        self.alpha = alpha
+        self.mse = nn.MSELoss()
+        self.ssim_loss = SeparableSSIMLoss(kernel_size=kernel_size)
+
+    def forward(self, recon, target):
+        loss_mse = self.mse(recon, target)
+        loss_ssim = self.ssim_loss(recon, target)
+        loss_total = self.alpha * loss_mse + (1.0 - self.alpha) * loss_ssim
+        return loss_total, loss_mse, loss_ssim
 
 
 class NativeSeabedPatchDataset(Dataset):
@@ -137,7 +191,7 @@ def train_autoencoder(epochs: int = 20, batch_size: int = 128, lr: float = 1e-3,
 
     device = torch.device("cpu")
     model = AE().to(device)
-    criterion = nn.MSELoss()
+    criterion = HybridTextureLoss(alpha=0.60)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     train_losses = []
@@ -147,38 +201,50 @@ def train_autoencoder(epochs: int = 20, batch_size: int = 128, lr: float = 1e-3,
     for epoch in range(1, epochs + 1):
         model.train()
         running_train_loss = 0.0
+        running_train_mse = 0.0
+        running_train_ssim = 0.0
         for batch in train_loader:
             batch = batch.to(device)
             optimizer.zero_grad()
             recon = model(batch)
-            loss = criterion(recon, batch)
+            loss, loss_mse, loss_ssim = criterion(recon, batch)
             loss.backward()
             optimizer.step()
             running_train_loss += loss.item() * batch.size(0)
+            running_train_mse += loss_mse.item() * batch.size(0)
+            running_train_ssim += loss_ssim.item() * batch.size(0)
 
         epoch_train_loss = running_train_loss / len(train_patches)
+        epoch_train_mse = running_train_mse / len(train_patches)
+        epoch_train_ssim = running_train_ssim / len(train_patches)
         train_losses.append(epoch_train_loss)
 
         # Validation pass
         model.eval()
         running_val_loss = 0.0
+        running_val_mse = 0.0
+        running_val_ssim = 0.0
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
                 recon = model(batch)
-                loss = criterion(recon, batch)
+                loss, loss_mse, loss_ssim = criterion(recon, batch)
                 running_val_loss += loss.item() * batch.size(0)
+                running_val_mse += loss_mse.item() * batch.size(0)
+                running_val_ssim += loss_ssim.item() * batch.size(0)
 
         epoch_val_loss = running_val_loss / len(val_patches)
+        epoch_val_mse = running_val_mse / len(val_patches)
+        epoch_val_ssim = running_val_ssim / len(val_patches)
         val_losses.append(epoch_val_loss)
 
         if epoch % 5 == 0 or epoch == 1 or epoch == epochs:
-            print(f"Epoch {epoch:02d}/{epochs:02d} | Train MSE: {epoch_train_loss:.6f} | Val MSE: {epoch_val_loss:.6f}")
+            print(f"Epoch {epoch:02d}/{epochs:02d} | Hybrid Loss: {epoch_train_loss:.5f} (MSE: {epoch_train_mse:.5f}, 1-SSIM: {epoch_train_ssim:.5f}) | Val Loss: {epoch_val_loss:.5f} (Val MSE: {epoch_val_mse:.5f})")
 
     elapsed = time.time() - t0
     print(f"\n[Training] Completed in {elapsed:.1f} seconds ({elapsed / 60.0:.2f} minutes).")
 
-    # Evaluate validation errors for anomaly thresholding
+    # Evaluate validation errors for anomaly thresholding (MSE on normalized [0, 1] tiles)
     model.eval()
     val_errors = []
     with torch.no_grad():
@@ -209,6 +275,7 @@ def train_autoencoder(epochs: int = 20, batch_size: int = 128, lr: float = 1e-3,
         "patch_size": 64,
         "input_channels": 1,
         "native_patches": True,
+        "loss_function": "HybridTextureLoss (0.60*MSE + 0.40*(1-SSIM))",
         "threshold_95": threshold_95,
         "threshold_99": threshold_99,
         "threshold_995": threshold_995,

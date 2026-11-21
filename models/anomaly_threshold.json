@@ -2,12 +2,13 @@
   "patch_size": 64,
   "input_channels": 1,
   "native_patches": true,
-  "threshold_95": 0.01556585496291518,
-  "threshold_99": 0.02045928271487355,
-  "threshold_995": 0.02111165761947625,
-  "recommended_threshold": 0.02045928271487355,
-  "mean_error": 0.005242045295302281,
-  "std_error": 0.004856498236543033,
+  "loss_function": "HybridTextureLoss (0.60*MSE + 0.40*(1-SSIM))",
+  "threshold_95": 0.013652971992269157,
+  "threshold_99": 0.01739895489066839,
+  "threshold_995": 0.018056281302124194,
+  "recommended_threshold": 0.01739895489066839,
+  "mean_error": 0.004539069073307758,
+  "std_error": 0.004233433851656844,
   "epochs": 20,
-  "final_val_loss": 0.005242045223712921
+  "final_val_loss": 0.12232917209466299
 }
