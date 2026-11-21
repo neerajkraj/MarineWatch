@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MarineWatch Mission Survey Dossier</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #fff;
+            color: #0f172a;
+            margin: 0;
+            padding: 30px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .report-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            border-bottom: 2px solid #0284c7;
+            padding-bottom: 16px;
+            margin-bottom: 20px;
+        }
+
+        .header-title h1 {
+            margin: 0 0 4px 0;
+            font-size: 22px;
+            color: #0369a1;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .header-title .sub {
+            color: #64748b;
+            font-size: 13px;
+        }
+
+        .header-meta {
+            text-align: right;
+            font-size: 12px;
+            color: #475569;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .meta-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 12px;
+        }
+
+        .meta-card .label {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #64748b;
+            font-weight: 600;
+        }
+
+        .meta-card .val {
+            font-size: 18px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-top: 4px;
+        }
+
+        .section-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #0f172a;
+            border-bottom: 1px solid #cbd5e1;
+            padding-bottom: 6px;
+            margin: 20px 0 14px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .imagery-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .img-box {
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 8px;
+            background: #f8fafc;
+            text-align: center;
+        }
+
+        .img-box img {
+            max-width: 100%;
+            height: auto;
+            max-height: 320px;
+            object-fit: contain;
+            border: 1px solid #000;
+            background: #000;
+        }
+
+        .img-box .caption {
+            font-size: 11.5px;
+            color: #475569;
+            margin-top: 6px;
+            font-weight: 600;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            margin-bottom: 24px;
+        }
+
+        th, td {
+            border: 1px solid #cbd5e1;
+            padding: 8px 10px;
+            text-align: left;
+        }
+
+        th {
+            background: #f1f5f9;
+            color: #334155;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 10.5px;
+        }
+
+        .badge {
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            display: inline-block;
+        }
+        .badge.ghost { background: #fee2e2; color: #b91c1c; }
+        .badge.manmade { background: #fef3c7; color: #b45309; }
+        .badge.anomaly { background: #dcfce7; color: #15803d; }
+
+        .sign-off {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px dashed #cbd5e1;
+        }
+
+        .sign-line {
+            border-bottom: 1px solid #334155;
+            margin-top: 40px;
+            margin-bottom: 6px;
+        }
+
+        .no-print-bar {
+            background: #0284c7;
+            color: #fff;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: -30px -30px 24px -30px;
+        }
+
+        .btn-print {
+            background: #fff;
+            color: #0284c7;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        @media print {
+            .no-print-bar {
+                display: none;
+            }
+            body {
+                padding: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="no-print-bar">
+        <span><strong>MarineWatch Survey Dossier</strong> — Operator Print & Export Console</span>
+        <button class="btn-print" onclick="window.print()">🖨️ Print / Save to PDF</button>
+    </div>
+
+    <div class="report-header">
+        <div class="header-title">
+            <h1>MarineWatch Inspection Dossier</h1>
+            <div class="sub">Autonomous Side-Scan Sonar (SSS) Debris & Target Inventory</div>
+        </div>
+        <div class="header-meta">
+            <div><strong>Report ID:</strong> MW-SSS-{{ meta.filename }}</div>
+            <div><strong>Generated:</strong> {{ meta.timestamp }}</div>
+            <div><strong>Processing Architecture:</strong> Dual-Module CPU (ONNX + AE)</div>
+        </div>
+    </div>
+
+    <div class="meta-grid">
+        <div class="meta-card">
+            <div class="label">Total Flagged Returns</div>
+            <div class="val" style="color: #0284c7;">{{ detections|length }}</div>
+        </div>
+        <div class="meta-card">
+            <div class="label">Ghost Gear / Nets</div>
+            <div class="val" style="color: #b91c1c;">{{ count_ghost }}</div>
+        </div>
+        <div class="meta-card">
+            <div class="label">Manmade Contacts</div>
+            <div class="val" style="color: #b45309;">{{ count_manmade }}</div>
+        </div>
+        <div class="meta-card">
+            <div class="label">Seabed Anomalies</div>
+            <div class="val" style="color: #15803d;">{{ count_anomaly }}</div>
+        </div>
+    </div>
+
+    <div class="section-title">
+        <span>Acoustic Visual Evidence Sheet</span>
+        <span style="font-size: 11px; font-weight: normal; color: #64748b;">Frequency: 450 kHz nominal</span>
+    </div>
+
+    <div class="imagery-grid">
+        <div class="img-box">
+            <img src="/files/{{ files.raw }}" alt="Raw Sonar">
+            <div class="caption">Figure 1.1: Raw Side-Scan Sonar Acoustic Echo</div>
+        </div>
+        <div class="img-box">
+            <img src="/files/{{ files.fused }}" alt="Fused AI Output">
+            <div class="caption">Figure 1.2: Dual-Module Fused Output (YOLO + Thermal Anomaly Heatmap)</div>
+        </div>
+    </div>
+
+    <div class="section-title">
+        <span>Itemized Target Inventory</span>
+        <span style="font-size: 11px; font-weight: normal; color: #64748b;">Coordinates in Waterfall Pixels</span>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 40px;">#</th>
+                <th>Classification</th>
+                <th>Confidence</th>
+                <th>Dimensions (W × H)</th>
+                <th>Bounding Coordinates</th>
+                <th>Detection Source</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for d in detections %}
+            <tr>
+                <td><strong>#{{ loop.index }}</strong></td>
+                <td>
+                    {% if d.label == 'ghost_gear' %}
+                        <span class="badge ghost">Ghost Gear / Pot</span>
+                    {% elif d.label == 'manmade_object' %}
+                        <span class="badge manmade">Manmade Contact</span>
+                    {% else %}
+                        <span class="badge anomaly">Seabed Anomaly</span>
+                    {% endif %}
+                </td>
+                <td><strong>{{ (d.score * 100)|round(1) }}%</strong></td>
+                <td>{{ d.width }} × {{ d.height }} px</td>
+                <td>({{ d.x1 }}, {{ d.y1 }}, {{ d.x2 }}, {{ d.y2 }})</td>
+                <td>{{ d.source }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6" style="text-align: center; color: #64748b; padding: 20px;">
+                    No targets detected. Seafloor confirmed clear.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="sign-off">
+        <div>
+            <div class="sign-line"></div>
+            <div><strong>Sonar Survey Specialist / Operator</strong></div>
+            <div style="font-size: 11px; color: #64748b;">Autonomous Survey Review Approved</div>
+        </div>
+        <div>
+            <div class="sign-line"></div>
+            <div><strong>Chief Hydrographer / Mission Lead</strong></div>
+            <div style="font-size: 11px; color: #64748b;">Bathymetric Clearance Verified</div>
+        </div>
+    </div>
+</body>
+</html>

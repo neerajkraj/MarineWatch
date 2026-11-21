@@ -82,7 +82,13 @@ class MarineWatchPipeline:
         else:
             print("[Pipeline] Module B weights not found. Running in detector-only mode.")
 
-    def run_detection(self, image_path: Path, output_dir: Path = None) -> Tuple[np.ndarray, List[Dict[str, Any]], Dict[str, str]]:
+    def run_detection(
+        self,
+        image_path: Path,
+        output_dir: Path = None,
+        conf_thresh: float = None,
+        anomaly_threshold: float = None,
+    ) -> Tuple[np.ndarray, List[Dict[str, Any]], Dict[str, str], Dict[str, int]]:
         if output_dir is None:
             output_dir = OUTPUTS_DIR
 
@@ -95,6 +101,10 @@ class MarineWatchPipeline:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
         img_3ch = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
+        # Active thresholds
+        current_conf = conf_thresh if conf_thresh is not None else 0.15
+        current_anomaly_th = anomaly_threshold if anomaly_threshold is not None else self.anomaly_threshold
+
         # -------------------------------------------------------------
         # STEP 1 & 2: Module A - Tiled YOLO Detection
         # -------------------------------------------------------------
@@ -103,7 +113,7 @@ class MarineWatchPipeline:
         class_ids = []
 
         for crop, _, (x0, y0) in tile_image(img_3ch, [], tile=416, overlap=0.2):
-            results = self.detector.predict(crop, imgsz=416, device="cpu", conf=self.conf_thresh, verbose=False)
+            results = self.detector.predict(crop, imgsz=416, device="cpu", conf=current_conf, verbose=False)
             for res in results:
                 for box in res.boxes:
                     bx1, by1, bx2, by2 = box.xyxy[0].cpu().numpy()
@@ -175,7 +185,7 @@ class MarineWatchPipeline:
                 # Generate Thermal Colormap for Anomaly Heatmap
                 # Clip and scale errors so threshold is the inflection point
                 v_min = np.percentile(avg_anomaly_map, 10)
-                v_max = max(self.anomaly_threshold * 2.0, float(np.percentile(avg_anomaly_map, 99.5)))
+                v_max = max(current_anomaly_th * 2.0, float(np.percentile(avg_anomaly_map, 99.5)))
                 norm_map = np.clip((avg_anomaly_map - v_min) / (v_max - v_min + 1e-6), 0.0, 1.0)
                 heatmap_uint8 = (norm_map * 255).astype(np.uint8)
 
@@ -187,7 +197,7 @@ class MarineWatchPipeline:
                 heatmap_overlay = cv2.addWeighted(img_3ch, 0.60, color_heatmap, 0.40, 0)
 
                 # Threshold to extract connected anomaly bounding regions
-                binary_mask = (avg_anomaly_map > self.anomaly_threshold).astype(np.uint8) * 255
+                binary_mask = (avg_anomaly_map > current_anomaly_th).astype(np.uint8) * 255
                 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
                 cleaned_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
 
@@ -265,12 +275,21 @@ class MarineWatchPipeline:
             cv2.putText(fused_img, lbl_txt, (d["x1"], max(d["y1"] - 6, 12)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
+        # Add structural attributes (id, width, height, area)
+        for idx, d in enumerate(final_detections):
+            d["id"] = idx + 1
+            d["width"] = int(d["x2"] - d["x1"])
+            d["height"] = int(d["y2"] - d["y1"])
+            d["area"] = int(d["width"] * d["height"])
+
         # Save files
         img_name = Path(image_path).name
+        raw_path = output_dir / f"raw_{img_name}"
         annotated_path = output_dir / f"annotated_{img_name}"
         heatmap_path = output_dir / f"heatmap_{img_name}"
         fused_path = output_dir / f"fused_{img_name}"
 
+        cv2.imwrite(str(raw_path), img_3ch)
         cv2.imwrite(str(annotated_path), bbox_img)
         cv2.imwrite(str(heatmap_path), heatmap_overlay)
         cv2.imwrite(str(fused_path), fused_img)
@@ -281,22 +300,34 @@ class MarineWatchPipeline:
         with open(report_path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             if write_header:
-                writer.writerow(["image", "x1", "y1", "x2", "y2", "source", "label", "score"])
+                writer.writerow(["image", "id", "x1", "y1", "x2", "y2", "width", "height", "source", "label", "score"])
             for d in final_detections:
                 writer.writerow([
                     img_name,
+                    d.get("id", ""),
                     d["x1"], d["y1"], d["x2"], d["y2"],
+                    d.get("width", ""), d.get("height", ""),
                     d["source"], d["label"], f"{d['score']:.4f}",
                 ])
 
         file_dict = {
+            "raw": raw_path.name,
             "annotated": annotated_path.name,
             "heatmap": heatmap_path.name,
             "fused": fused_path.name,
         }
 
+        meta = {
+            "width": w,
+            "height": h,
+            "filename": img_name,
+            "total_detections": len(final_detections),
+            "anomaly_threshold_used": float(current_anomaly_th),
+            "conf_thresh_used": float(current_conf),
+        }
+
         print(f"[Inference] Finished: {len(final_detections)} detections logged. Heatmap & Fused views saved.")
-        return bbox_img, final_detections, file_dict
+        return bbox_img, final_detections, file_dict, meta
 
 
 def main():
