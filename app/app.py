@@ -1,11 +1,11 @@
 """
-MarineWatch v2.0 — Modern Sonar Intelligence Studio & REST API (Package A)
+MarineWatch v2.0 — Modern Sonar Intelligence Studio & REST API (Packages A & B & C)
 
 Features:
 - Async REST API (/api/analyze, /api/sample)
-- Split Curtain Before/After Comparison
-- Real-time Client-Side Confidence & Opacity Tuning
-- Acoustic Shadow Target Elevation Estimator
+- Multi-Image Batch Survey Processor (/api/batch_analyze, /api/sample_batch)
+- Side-by-Side Raw vs AI Inspection
+- Test-Time Augmentation (TTA) + Soft-NMS + Physics Shadow Verification
 - Professional Printable Survey Dossier (/report/print)
 - Fast ONNX-accelerated CPU Inference (<120 ms)
 """
@@ -14,9 +14,10 @@ import os
 import sys
 import shutil
 import time
+import csv
 from datetime import datetime
 from pathlib import Path
-from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, redirect, url_for
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
 
 # Add src to python path
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
@@ -30,10 +31,11 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["UPLOAD_FOLDER"] = str(UPLOADS_DIR)
-app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
 
 PIPELINE = None
 LAST_ANALYSIS = {}
+LAST_BATCH_RESULTS = {}
 
 
 def get_pipeline():
@@ -149,6 +151,228 @@ def api_sample():
         "meta": meta,
         "latency": elapsed_ms,
     })
+
+
+@app.route("/api/batch_analyze", methods=["POST"])
+def api_batch_analyze():
+    global LAST_BATCH_RESULTS
+    files = request.files.getlist("sonar_files")
+    if not files or files[0].filename == "":
+        return jsonify({"success": False, "error": "No sonar files selected for batch"}), 400
+
+    pipeline = get_pipeline()
+    results = []
+    total_ghost = 0
+    total_manmade = 0
+    total_anomaly = 0
+    t_start = time.time()
+
+    for f in files:
+        filename = f.filename
+        save_path = UPLOADS_DIR / filename
+        f.save(str(save_path))
+
+        t0 = time.time()
+        bbox_img, dets, file_dict, meta = pipeline.run_detection(save_path, output_dir=UPLOADS_DIR)
+        lat = int((time.time() - t0) * 1000)
+
+        n_ghost = sum(1 for d in dets if d["label"] == "ghost_gear")
+        n_manmade = sum(1 for d in dets if d["label"] == "manmade_object")
+        n_anom = sum(1 for d in dets if d["label"] == "anomaly")
+
+        total_ghost += n_ghost
+        total_manmade += n_manmade
+        total_anomaly += n_anom
+
+        if n_ghost > 0:
+            status = "GHOST_GEAR"
+            status_label = f"Ghost Gear ({n_ghost})"
+            badge = "ghost"
+        elif n_manmade > 0:
+            status = "MANMADE"
+            status_label = f"Contact ({n_manmade})"
+            badge = "manmade"
+        elif n_anom > 0:
+            status = "ANOMALY"
+            status_label = f"Anomaly ({n_anom})"
+            badge = "anomaly"
+        else:
+            status = "CLEAN"
+            status_label = "Clean Seafloor"
+            badge = "clean"
+
+        results.append({
+            "filename": filename,
+            "status": status,
+            "status_label": status_label,
+            "badge": badge,
+            "counts": {
+                "ghost_gear": n_ghost,
+                "manmade_object": n_manmade,
+                "anomaly": n_anom,
+                "total": len(dets),
+            },
+            "files": file_dict,
+            "detections": dets,
+            "meta": meta,
+            "latency_ms": lat,
+        })
+
+    total_elapsed_ms = int((time.time() - t_start) * 1000)
+
+    # Write batch_report.csv
+    batch_report_path = UPLOADS_DIR / "batch_report.csv"
+    with open(batch_report_path, "w", newline="", encoding="utf-8") as f_csv:
+        writer = csv.writer(f_csv)
+        writer.writerow(["image", "id", "status", "label", "score", "has_shadow", "shadow_contrast", "x1", "y1", "x2", "y2", "width", "height"])
+        for r in results:
+            for d in r["detections"]:
+                writer.writerow([
+                    r["filename"],
+                    d.get("id", ""),
+                    r["status"],
+                    d["label"],
+                    f"{d['score']:.4f}",
+                    d.get("has_shadow", False),
+                    d.get("shadow_contrast", 0.0),
+                    d["x1"], d["y1"], d["x2"], d["y2"],
+                    d.get("width", ""), d.get("height", ""),
+                ])
+
+    LAST_BATCH_RESULTS = {
+        "success": True,
+        "total_images": len(results),
+        "results": results,
+        "summary": {
+            "total_images": len(results),
+            "flagged_images": sum(1 for r in results if r["status"] != "CLEAN"),
+            "clean_images": sum(1 for r in results if r["status"] == "CLEAN"),
+            "total_ghost_gear": total_ghost,
+            "total_manmade": total_manmade,
+            "total_anomalies": total_anomaly,
+            "total_latency_ms": total_elapsed_ms,
+        },
+    }
+    return jsonify(LAST_BATCH_RESULTS)
+
+
+@app.route("/api/sample_batch", methods=["GET"])
+def api_sample_batch():
+    global LAST_BATCH_RESULTS
+    nombo_samples = sorted(list(TEST_IMG_DIR.glob("*nombo*.jpg")))
+    gv_samples = sorted(list(TEST_IMG_DIR.glob("*baycove*.jpg")))
+
+    selected = []
+    if nombo_samples:
+        selected.append(nombo_samples[0])
+    if gv_samples:
+        selected.append(gv_samples[0])
+    if len(nombo_samples) > 1:
+        selected.append(nombo_samples[1])
+    if len(gv_samples) > 1:
+        selected.append(gv_samples[1])
+
+    pipeline = get_pipeline()
+    results = []
+    total_ghost = 0
+    total_manmade = 0
+    total_anomaly = 0
+    t_start = time.time()
+
+    for target_sample in selected:
+        dest_path = UPLOADS_DIR / target_sample.name
+        shutil.copy(target_sample, dest_path)
+
+        t0 = time.time()
+        bbox_img, dets, file_dict, meta = pipeline.run_detection(dest_path, output_dir=UPLOADS_DIR)
+        lat = int((time.time() - t0) * 1000)
+
+        n_ghost = sum(1 for d in dets if d["label"] == "ghost_gear")
+        n_manmade = sum(1 for d in dets if d["label"] == "manmade_object")
+        n_anom = sum(1 for d in dets if d["label"] == "anomaly")
+
+        total_ghost += n_ghost
+        total_manmade += n_manmade
+        total_anomaly += n_anom
+
+        if n_ghost > 0:
+            status = "GHOST_GEAR"
+            status_label = f"Ghost Gear ({n_ghost})"
+            badge = "ghost"
+        elif n_manmade > 0:
+            status = "MANMADE"
+            status_label = f"Contact ({n_manmade})"
+            badge = "manmade"
+        elif n_anom > 0:
+            status = "ANOMALY"
+            status_label = f"Anomaly ({n_anom})"
+            badge = "anomaly"
+        else:
+            status = "CLEAN"
+            status_label = "Clean Seafloor"
+            badge = "clean"
+
+        results.append({
+            "filename": target_sample.name,
+            "status": status,
+            "status_label": status_label,
+            "badge": badge,
+            "counts": {
+                "ghost_gear": n_ghost,
+                "manmade_object": n_manmade,
+                "anomaly": n_anom,
+                "total": len(dets),
+            },
+            "files": file_dict,
+            "detections": dets,
+            "meta": meta,
+            "latency_ms": lat,
+        })
+
+    total_elapsed_ms = int((time.time() - t_start) * 1000)
+
+    # Write batch_report.csv
+    batch_report_path = UPLOADS_DIR / "batch_report.csv"
+    with open(batch_report_path, "w", newline="", encoding="utf-8") as f_csv:
+        writer = csv.writer(f_csv)
+        writer.writerow(["image", "id", "status", "label", "score", "has_shadow", "shadow_contrast", "x1", "y1", "x2", "y2", "width", "height"])
+        for r in results:
+            for d in r["detections"]:
+                writer.writerow([
+                    r["filename"],
+                    d.get("id", ""),
+                    r["status"],
+                    d["label"],
+                    f"{d['score']:.4f}",
+                    d.get("has_shadow", False),
+                    d.get("shadow_contrast", 0.0),
+                    d["x1"], d["y1"], d["x2"], d["y2"],
+                    d.get("width", ""), d.get("height", ""),
+                ])
+
+    LAST_BATCH_RESULTS = {
+        "success": True,
+        "total_images": len(results),
+        "results": results,
+        "summary": {
+            "total_images": len(results),
+            "flagged_images": sum(1 for r in results if r["status"] != "CLEAN"),
+            "clean_images": sum(1 for r in results if r["status"] == "CLEAN"),
+            "total_ghost_gear": total_ghost,
+            "total_manmade": total_manmade,
+            "total_anomalies": total_anomaly,
+            "total_latency_ms": total_elapsed_ms,
+        },
+    }
+    return jsonify(LAST_BATCH_RESULTS)
+
+
+@app.route("/download_batch_report", methods=["GET"])
+def download_batch_report():
+    batch_file = UPLOADS_DIR / "batch_report.csv"
+    if batch_file.exists():
+        return send_file(str(batch_file), as_attachment=True, download_name="marinewatch_batch_survey_report.csv")
+    return "Batch report not generated yet.", 404
 
 
 @app.route("/report/print", methods=["GET"])

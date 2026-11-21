@@ -443,6 +443,88 @@
         .tag-pill.ghost { background: rgba(244, 63, 94, 0.15); color: var(--red); }
         .tag-pill.manmade { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
         .tag-pill.anomaly { background: rgba(16, 185, 129, 0.15); color: var(--green); }
+
+        /* Batch Survey Line Gallery */
+        .batch-card {
+            display: none;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 20px;
+        }
+
+        .batch-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .batch-title {
+            font-size: 14.5px;
+            font-weight: 600;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .batch-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 14px;
+        }
+
+        .batch-item {
+            background: #090e1a;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            position: relative;
+        }
+
+        .batch-item:hover, .batch-item.active {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(56, 189, 248, 0.15);
+        }
+
+        .batch-thumb {
+            width: 100%;
+            height: 140px;
+            object-fit: cover;
+            border-radius: 4px;
+            background: #000;
+        }
+
+        .batch-name {
+            font-size: 11.5px;
+            font-weight: 500;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .batch-badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 4px;
+            display: inline-block;
+            width: fit-content;
+        }
+        .batch-badge.clean { background: rgba(16, 185, 129, 0.15); color: var(--green); }
+        .batch-badge.ghost { background: rgba(244, 63, 94, 0.15); color: var(--red); }
+        .batch-badge.manmade { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
+        .batch-badge.anomaly { background: rgba(56, 189, 248, 0.15); color: var(--accent); }
     </style>
 </head>
 <body>
@@ -461,15 +543,25 @@
 
             <div class="nav-actions">
                 <input type="file" id="file-input" style="display:none;" accept=".jpg,.jpeg,.png,.bmp">
+                <input type="file" id="batch-input" multiple style="display:none;" accept=".jpg,.jpeg,.png,.bmp">
                 <button class="btn" onclick="document.getElementById('file-input').click()">
-                    <i class="fa-solid fa-upload"></i> Upload Sonar
+                    <i class="fa-solid fa-upload"></i> Single Tile
+                </button>
+                <button class="btn" onclick="document.getElementById('batch-input').click()">
+                    <i class="fa-solid fa-folder-open"></i> Batch Upload
+                </button>
+                <button class="btn" onclick="loadBatchSample()">
+                    <i class="fa-solid fa-layer-group"></i> Test Batch (4 Tiles)
                 </button>
                 <button class="btn" onclick="loadSample('sample1')">
-                    <i class="fa-solid fa-cube"></i> Sample 1: Contacts
+                    <i class="fa-solid fa-cube"></i> Sample 1
                 </button>
                 <button class="btn" onclick="loadSample('sample2')">
-                    <i class="fa-solid fa-network-wired"></i> Sample 2: Ghost Gear
+                    <i class="fa-solid fa-network-wired"></i> Sample 2
                 </button>
+                <a href="/download_batch_report" class="btn" id="btn-batch-csv" style="display:none;">
+                    <i class="fa-solid fa-file-excel"></i> Batch CSV
+                </a>
                 <a href="/download_report" class="btn" id="btn-csv">
                     <i class="fa-solid fa-file-csv"></i> CSV
                 </a>
@@ -563,6 +655,28 @@
                     </label>
                 </div>
             </div>
+        </div>
+
+        <!-- Batch Survey Line Gallery -->
+        <div class="batch-card" id="batch-gallery-card">
+            <div class="batch-header">
+                <div>
+                    <div class="batch-title">
+                        <i class="fa-solid fa-water-ladder" style="color: var(--accent);"></i>
+                        Mission Survey Line Overview
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                        Click any survey tile below to inspect in high-resolution studio above.
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span id="batch-summary-pills"></span>
+                    <a href="/download_batch_report" class="btn" style="font-size: 11.5px; padding: 5px 10px;">
+                        <i class="fa-solid fa-download"></i> Master Batch CSV
+                    </a>
+                </div>
+            </div>
+            <div class="batch-grid" id="batch-grid"></div>
         </div>
 
         <!-- Classified Targets Table -->
@@ -777,6 +891,117 @@
             });
 
             document.getElementById('table-subtitle').textContent = `${count} of ${currentData.detections.length} returns shown`;
+        }
+
+        let currentBatchData = null;
+        let selectedBatchIndex = 0;
+
+        const batchInput = document.getElementById('batch-input');
+        if (batchInput) {
+            batchInput.addEventListener('change', (e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                    uploadBatchFiles(e.target.files);
+                }
+            });
+        }
+
+        function uploadBatchFiles(files) {
+            loader.style.display = 'flex';
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) {
+                formData.append('sonar_files', files[i]);
+            }
+
+            fetch('/api/batch_analyze', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                loader.style.display = 'none';
+                if (data.success) {
+                    renderBatchGallery(data);
+                } else {
+                    alert('Batch failed: ' + (data.error || 'Server error'));
+                }
+            })
+            .catch(err => {
+                loader.style.display = 'none';
+                alert('Batch upload error: ' + err);
+            });
+        }
+
+        function loadBatchSample() {
+            loader.style.display = 'flex';
+            fetch('/api/sample_batch')
+            .then(res => res.json())
+            .then(data => {
+                loader.style.display = 'none';
+                if (data.success) {
+                    renderBatchGallery(data);
+                }
+            })
+            .catch(err => {
+                loader.style.display = 'none';
+                alert('Sample batch error: ' + err);
+            });
+        }
+
+        function renderBatchGallery(batchData) {
+            currentBatchData = batchData;
+            const card = document.getElementById('batch-gallery-card');
+            const grid = document.getElementById('batch-grid');
+            const pills = document.getElementById('batch-summary-pills');
+            const btnBatchCsv = document.getElementById('btn-batch-csv');
+
+            card.style.display = 'block';
+            if (btnBatchCsv) btnBatchCsv.style.display = 'inline-flex';
+
+            const s = batchData.summary;
+            pills.innerHTML = `
+                <span class="badge-pill" style="background: rgba(56, 189, 248, 0.15); color: var(--accent);">${s.total_images} Tiles</span>
+                <span class="badge-pill clean">${s.clean_images} Clean</span>
+                <span class="badge-pill ghost">${s.total_ghost_gear} Ghost Gear</span>
+                <span class="badge-pill manmade">${s.total_manmade} Contacts</span>
+                <span style="font-size: 11px; color: var(--text-dim);">${s.total_latency_ms} ms</span>
+            `;
+
+            grid.innerHTML = '';
+            batchData.results.forEach((r, idx) => {
+                const item = document.createElement('div');
+                item.className = 'batch-item' + (idx === 0 ? ' active' : '');
+                item.id = 'batch-item-' + idx;
+                item.onclick = () => selectBatchTile(idx);
+
+                item.innerHTML = `
+                    <img class="batch-thumb" src="/files/${r.files.fused}" alt="Tile ${idx+1}">
+                    <div class="batch-name" title="${r.filename}">${r.filename}</div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span class="batch-badge ${r.badge}">${r.status_label}</span>
+                        <span style="font-size: 11px; color: var(--text-dim);">${r.latency_ms} ms</span>
+                    </div>
+                `;
+                grid.appendChild(item);
+            });
+
+            // Automatically select and display the first tile in the main viewport
+            if (batchData.results.length > 0) {
+                selectBatchTile(0);
+            }
+        }
+
+        function selectBatchTile(index) {
+            if (!currentBatchData || !currentBatchData.results[index]) return;
+            selectedBatchIndex = index;
+
+            document.querySelectorAll('.batch-item').forEach((el, idx) => {
+                el.classList.toggle('active', idx === index);
+            });
+
+            const tileData = currentBatchData.results[index];
+            renderAnalysis(tileData);
+
+            document.querySelector('.stage-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
         // Initialize with Sample 1
