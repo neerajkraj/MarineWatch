@@ -752,7 +752,14 @@
                 method: 'POST',
                 body: formData
             })
-            .then(res => res.json())
+            .then(async (res) => {
+                const text = await res.text();
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    throw new Error('Server response error (Status ' + res.status + ')');
+                }
+            })
             .then(data => {
                 loader.style.display = 'none';
                 if (data.success) {
@@ -764,7 +771,7 @@
             })
             .catch(err => {
                 loader.style.display = 'none';
-                alert('Upload error: ' + err);
+                alert('Upload error: ' + err.message);
             });
         }
 
@@ -916,7 +923,14 @@
                 method: 'POST',
                 body: formData
             })
-            .then(res => res.json())
+            .then(async (res) => {
+                const text = await res.text();
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    throw new Error('Server response error (Status ' + res.status + ')');
+                }
+            })
             .then(data => {
                 loader.style.display = 'none';
                 if (data.success) {
@@ -927,14 +941,21 @@
             })
             .catch(err => {
                 loader.style.display = 'none';
-                alert('Batch upload error: ' + err);
+                alert('Batch upload error: ' + err.message);
             });
         }
 
         function loadBatchSample() {
             loader.style.display = 'flex';
             fetch('/api/sample_batch')
-            .then(res => res.json())
+            .then(async (res) => {
+                const text = await res.text();
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    throw new Error('Server response error (Status ' + res.status + ')');
+                }
+            })
             .then(data => {
                 loader.style.display = 'none';
                 if (data.success) {
@@ -943,7 +964,7 @@
             })
             .catch(err => {
                 loader.style.display = 'none';
-                alert('Sample batch error: ' + err);
+                alert('Sample batch error: ' + err.message);
             });
         }
 

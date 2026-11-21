@@ -17,7 +17,9 @@ import time
 import csv
 from datetime import datetime
 from pathlib import Path
+import numpy as np
 from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
+from flask.json.provider import DefaultJSONProvider
 
 # Add src to python path
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
@@ -29,7 +31,37 @@ UPLOADS_DIR = BASE_DIR / "outputs" / "dashboard_uploads"
 TEST_IMG_DIR = BASE_DIR / "data" / "processed" / "sss" / "images" / "test"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
+class RobustNumpyJSONProvider(DefaultJSONProvider):
+    """Safely serializes numpy scalars, arrays, and int32/float32 types to standard JSON."""
+    def default(self, o):
+        if isinstance(o, (np.integer,)):
+            return int(o)
+        if isinstance(o, (np.floating,)):
+            return float(o)
+        if isinstance(o, (np.bool_,)):
+            return bool(o)
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        return super().default(o)
+
+def sanitize_json(data):
+    """Recursively converts all numpy scalars and arrays to native Python types."""
+    if isinstance(data, dict):
+        return {str(k): sanitize_json(v) for k, v in data.items()}
+    elif isinstance(data, (list, tuple)):
+        return [sanitize_json(v) for v in data]
+    elif isinstance(data, np.integer):
+        return int(data)
+    elif isinstance(data, np.floating):
+        return float(data)
+    elif isinstance(data, np.bool_):
+        return bool(data)
+    elif isinstance(data, np.ndarray):
+        return data.tolist()
+    return data
+
 app = Flask(__name__, template_folder="templates", static_folder="static")
+app.json = RobustNumpyJSONProvider(app)
 app.config["UPLOAD_FOLDER"] = str(UPLOADS_DIR)
 app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
 
@@ -75,7 +107,7 @@ def api_analyze():
     meta["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
     meta["latency_ms"] = elapsed_ms
 
-    LAST_ANALYSIS = {
+    LAST_ANALYSIS = sanitize_json({
         "files": file_dict,
         "detections": detections,
         "meta": meta,
@@ -85,14 +117,14 @@ def api_analyze():
             "anomaly": count_anomaly,
             "total": len(detections),
         },
-    }
+    })
 
     return jsonify({
         "success": True,
         "files": file_dict,
-        "detections": detections,
+        "detections": LAST_ANALYSIS["detections"],
         "counts": LAST_ANALYSIS["counts"],
-        "meta": meta,
+        "meta": LAST_ANALYSIS["meta"],
         "latency": elapsed_ms,
     })
 
@@ -131,7 +163,7 @@ def api_sample():
     meta["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
     meta["latency_ms"] = elapsed_ms
 
-    LAST_ANALYSIS = {
+    LAST_ANALYSIS = sanitize_json({
         "files": file_dict,
         "detections": detections,
         "meta": meta,
@@ -141,14 +173,14 @@ def api_sample():
             "anomaly": count_anomaly,
             "total": len(detections),
         },
-    }
+    })
 
     return jsonify({
         "success": True,
         "files": file_dict,
-        "detections": detections,
+        "detections": LAST_ANALYSIS["detections"],
         "counts": LAST_ANALYSIS["counts"],
-        "meta": meta,
+        "meta": LAST_ANALYSIS["meta"],
         "latency": elapsed_ms,
     })
 
@@ -253,6 +285,7 @@ def api_batch_analyze():
             "total_latency_ms": total_elapsed_ms,
         },
     }
+    LAST_BATCH_RESULTS = sanitize_json(LAST_BATCH_RESULTS)
     return jsonify(LAST_BATCH_RESULTS)
 
 
@@ -364,6 +397,7 @@ def api_sample_batch():
             "total_latency_ms": total_elapsed_ms,
         },
     }
+    LAST_BATCH_RESULTS = sanitize_json(LAST_BATCH_RESULTS)
     return jsonify(LAST_BATCH_RESULTS)
 
 

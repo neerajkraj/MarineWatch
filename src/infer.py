@@ -364,22 +364,24 @@ class MarineWatchPipeline:
 
                 num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned_mask)
                 for label_idx in range(1, num_labels):
-                    area = stats[label_idx, cv2.CC_STAT_AREA]
+                    area = int(stats[label_idx, cv2.CC_STAT_AREA])
                     if area >= 200:
-                        ax1 = stats[label_idx, cv2.CC_STAT_LEFT]
-                        ay1 = stats[label_idx, cv2.CC_STAT_TOP]
-                        aw = stats[label_idx, cv2.CC_STAT_WIDTH]
-                        ah = stats[label_idx, cv2.CC_STAT_HEIGHT]
+                        ax1 = int(stats[label_idx, cv2.CC_STAT_LEFT])
+                        ay1 = int(stats[label_idx, cv2.CC_STAT_TOP])
+                        aw = int(stats[label_idx, cv2.CC_STAT_WIDTH])
+                        ah = int(stats[label_idx, cv2.CC_STAT_HEIGHT])
                         peak_score = float(np.max(avg_anomaly_map[labels == label_idx]))
 
                         anomaly_regions.append({
-                            "x1": ax1,
-                            "y1": ay1,
-                            "x2": ax1 + aw,
-                            "y2": ay1 + ah,
+                            "x1": int(ax1),
+                            "y1": int(ay1),
+                            "x2": int(ax1 + aw),
+                            "y2": int(ay1 + ah),
                             "source": "Module B (AE)",
                             "label": "anomaly",
-                            "score": peak_score,
+                            "score": float(peak_score),
+                            "has_shadow": False,
+                            "shadow_contrast": 0.0,
                         })
 
         # -------------------------------------------------------------
@@ -436,12 +438,19 @@ class MarineWatchPipeline:
             cv2.putText(fused_img, lbl_txt, (d["x1"], max(d["y1"] - 6, 12)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
-        # Add structural attributes (id, width, height, area)
+        # Add structural attributes (id, width, height, area) and ensure native Python types for JSON
         for idx, d in enumerate(final_detections):
-            d["id"] = idx + 1
+            d["id"] = int(idx + 1)
+            d["x1"] = int(d["x1"])
+            d["y1"] = int(d["y1"])
+            d["x2"] = int(d["x2"])
+            d["y2"] = int(d["y2"])
+            d["score"] = float(d["score"])
             d["width"] = int(d["x2"] - d["x1"])
             d["height"] = int(d["y2"] - d["y1"])
             d["area"] = int(d["width"] * d["height"])
+            d["has_shadow"] = bool(d.get("has_shadow", False))
+            d["shadow_contrast"] = float(d.get("shadow_contrast", 0.0))
 
         # Save files
         img_name = Path(image_path).name
