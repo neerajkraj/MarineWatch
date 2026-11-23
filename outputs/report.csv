@@ -1,3 +1,6 @@
-image,x1,y1,x2,y2,source,label,score
-nombo_nombo_2010_t007807.jpg,102,165,119,176,Module A (YOLO),ghost_gear,0.4932
-nombo_nombo_2010_t007807.jpg,107,167,123,175,Module A (YOLO),ghost_gear,0.3431
+image,target_id,x1,y1,x2,y2,width,height,engine,label,confidence,shadow_present,shadow_contrast
+nombo_nombo_2010_t007807.jpg,1,102,165,119,176,17,11,Module A (YOLO+TTA),manmade_object,0.4932,True,0.412
+ghostvision_gv_baycove_01_t012454.jpg,1,142,284,178,312,36,28,Module A (YOLO+TTA),ghost_gear,0.4110,True,0.325
+ghostvision_gv_baycove_05_t011821.jpg,1,298,110,325,131,27,21,Module A (YOLO+TTA),ghost_gear,0.3339,True,0.180
+Contact_13_sslo_png_jpg.rf.3f815e970a799a397e8bc9714126e61e.jpg,1,326,484,348,501,22,17,Module A (YOLO+TTA),ghost_gear,0.2225,True,0.374
+Contact_13_sslo_png_jpg.rf.3f815e970a799a397e8bc9714126e61e.jpg,2,310,313,328,328,18,15,Module A (YOLO+TTA),manmade_object,0.2302,True,0.535
